@@ -92,6 +92,23 @@ WantedBy=multi-user.target
 
 `/healthz` — GET, возвращает `{"status":"ok"}`; нужен для проверок живости.
 
+## Автоматическая установка
+Скрипт `scripts/install.sh` сворачивает все шаги в один запуск:
+- ставит зависимости (`git`, `golang-go`, `docker.io`, `curl`);
+- создаёт пользователя/группу `inconnect`;
+- клонирует репозиторий, собирает бинарь и кладёт его в `/usr/local/bin`;
+- готовит каталоги `/var/lib/inconnect-agent` и `/etc/xray`;
+- подтягивает Docker-образ Xray, пишет unit-файл systemd и запускает службу.
+
+Перед запуском обязательно задайте `REPO_URL` (и при необходимости другие параметры) через переменные окружения:
+```bash
+sudo REPO_URL=https://github.com/your-org/inconnect-agent.git \
+     PUBLIC_IP=203.0.113.10 \
+     AUTH_TOKEN=SECRET_TOKEN \
+     ./scripts/install.sh
+```
+Доступные переменные: `BRANCH`, `INSTALL_DIR`, `MIN_PORT`, `MAX_PORT`, `DOCKER_IMAGE`, `LISTEN_ADDR`, `DB_PATH`, `CONFIG_DIR`, и т.д. — см. начало скрипта.
+
 ## Примечания
 - `ports.db` использует WAL и блокировки SQLite (`_busy_timeout=5000`), поэтому агент рассчитан на единственный экземпляр.
 - Порты, находящиеся в статусе `used`, всегда присутствуют в конфиге с тем же паролем; `/adduser` не требует перезагрузки.
