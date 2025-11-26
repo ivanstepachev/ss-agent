@@ -53,6 +53,14 @@ func (a *Agent) shardList(target []int) ([]ShardDefinition, error) {
 }
 
 func (a *Agent) Reload(ctx context.Context, rotateReserved bool, target []int) (map[int]int, error) {
+	return a.reload(ctx, rotateReserved, target, false)
+}
+
+func (a *Agent) ReloadAndRestart(ctx context.Context, rotateReserved bool, target []int) (map[int]int, error) {
+	return a.reload(ctx, rotateReserved, target, true)
+}
+
+func (a *Agent) reload(ctx context.Context, rotateReserved bool, target []int, hardRestart bool) (map[int]int, error) {
 	a.reloadM.Lock()
 	defer a.reloadM.Unlock()
 
@@ -63,7 +71,7 @@ func (a *Agent) Reload(ctx context.Context, rotateReserved bool, target []int) (
 
 	results := make(map[int]int, len(shards))
 	for _, shard := range shards {
-		count, err := a.reloadShard(ctx, shard, rotateReserved)
+		count, err := a.reloadShard(ctx, shard, rotateReserved, hardRestart)
 		if err != nil {
 			return results, err
 		}
@@ -88,7 +96,7 @@ func (a *Agent) Restart(ctx context.Context, target []int) error {
 	return nil
 }
 
-func (a *Agent) reloadShard(ctx context.Context, shard ShardDefinition, rotate bool) (int, error) {
+func (a *Agent) reloadShard(ctx context.Context, shard ShardDefinition, rotate bool, hardRestart bool) (int, error) {
 	var processed int
 	if rotate {
 		count, err := a.store.RotateReserved(ctx, shard.ID)
@@ -123,8 +131,14 @@ func (a *Agent) reloadShard(ctx context.Context, shard ShardDefinition, rotate b
 		return processed, fmt.Errorf("activate config shard %d: %w", shard.ID, err)
 	}
 
-	if err := a.docker.ApplyShard(ctx, a.cfg, shard); err != nil {
-		return processed, err
+	if hardRestart {
+		if err := a.docker.FullRestartShard(ctx, a.cfg, shard); err != nil {
+			return processed, err
+		}
+	} else {
+		if err := a.docker.ApplyShard(ctx, a.cfg, shard); err != nil {
+			return processed, err
+		}
 	}
 
 	log.Printf("shard %d config updated", shard.ID)

@@ -162,11 +162,12 @@ func (a *Agent) handleRestart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		if err := a.Restart(context.Background(), target); err != nil {
+		processed, err := a.ReloadAndRestart(context.Background(), true, target)
+		if err != nil {
 			log.Printf("async restart failed: %v", err)
 			return
 		}
-		log.Printf("async restart finished for shards %v", target)
+		log.Printf("async restart finished: %+v", processed)
 	}()
 }
 
