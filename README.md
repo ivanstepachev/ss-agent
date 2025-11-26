@@ -113,6 +113,11 @@ WantedBy=multi-user.target
     - пароли у `reserved` → `free`;
     - пересборка конфига выбранного шарда;
     - `xray -test` + обновление файла + `SIGUSR1` контейнеру (fallback на `docker restart` при ошибке).
+- `/restart`
+  ```bash
+  curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/restart
+  ```
+  Аналогично устроен как `/reload`, но выполняет **полный рестарт** шардов (или конкретного, если передать `{"shardId":2}`), чтобы сбросить все текущие TCP/UDP соединения.
 
 `/healthz` — GET, возвращает `{"status":"ok"}`; нужен для проверок живости.
 
@@ -174,6 +179,9 @@ sudo LOCAL_SOURCE_DIR=$PWD \
         -H "X-Auth-Token: SECRET" \
         -d '{"slotId":<slot_from_adduser>}' http://127.0.0.1:8080/deleteuser
    curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/reload
+   curl -XPOST -H "X-Auth-Token: SECRET" \
+        -d '{"shardId":1}' \
+        http://127.0.0.1:8080/restart
    journalctl -u inconnect-agent -n 20
    ```
    В журналах появятся строки `async reload finished` и `reserved processed=N`.

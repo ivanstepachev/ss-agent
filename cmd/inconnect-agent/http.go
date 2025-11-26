@@ -17,6 +17,7 @@ func (a *Agent) Router() http.Handler {
 	mux.Handle("/adduser", a.wrap(a.handleAddUser))
 	mux.Handle("/deleteuser", a.wrap(a.handleDeleteUser))
 	mux.Handle("/reload", a.wrap(a.handleReload))
+	mux.Handle("/restart", a.wrap(a.handleRestart))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -139,6 +140,33 @@ func (a *Agent) handleReload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("async reload finished: %+v", processed)
+	}()
+}
+
+func (a *Agent) handleRestart(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ShardID int `json:"shardId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":  "accepted",
+		"message": "restart started",
+	})
+
+	var target []int
+	if req.ShardID > 0 {
+		target = []int{req.ShardID}
+	}
+
+	go func() {
+		if err := a.Restart(context.Background(), target); err != nil {
+			log.Printf("async restart failed: %v", err)
+			return
+		}
+		log.Printf("async restart finished for shards %v", target)
 	}()
 }
 

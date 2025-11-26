@@ -72,6 +72,22 @@ func (a *Agent) Reload(ctx context.Context, rotateReserved bool, target []int) (
 	return results, nil
 }
 
+func (a *Agent) Restart(ctx context.Context, target []int) error {
+	a.reloadM.Lock()
+	defer a.reloadM.Unlock()
+
+	shards, err := a.shardList(target)
+	if err != nil {
+		return err
+	}
+	for _, shard := range shards {
+		if err := a.docker.FullRestartShard(ctx, a.cfg, shard); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *Agent) reloadShard(ctx context.Context, shard ShardDefinition, rotate bool) (int, error) {
 	var processed int
 	if rotate {
@@ -316,6 +332,18 @@ func (d *DockerManager) ApplyShard(ctx context.Context, cfg Config, shard ShardD
 		}
 	}
 	return nil
+}
+
+func (d *DockerManager) FullRestartShard(ctx context.Context, cfg Config, shard ShardDefinition) error {
+	exists, err := d.containerExists(ctx, shard.ContainerName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		log.Printf("docker container %s not found, creating", shard.ContainerName)
+		return d.createContainer(ctx, cfg, shard)
+	}
+	return d.restartContainer(ctx, shard.ContainerName)
 }
 
 func (d *DockerManager) containerExists(ctx context.Context, name string) (bool, error) {
