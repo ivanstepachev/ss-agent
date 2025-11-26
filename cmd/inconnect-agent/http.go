@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -96,18 +98,19 @@ func (a *Agent) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) handleReload(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	processed, err := a.Reload(ctx, true)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "reload_failed")
-		return
-	}
-	resp := map[string]any{
-		"status":            "ok",
-		"reloaded":          true,
-		"reservedProcessed": processed,
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":  "accepted",
+		"message": "reload started",
+	})
+
+	go func() {
+		processed, err := a.Reload(context.Background(), true)
+		if err != nil {
+			log.Printf("async reload failed: %v", err)
+			return
+		}
+		log.Printf("async reload finished, reserved processed=%d", processed)
+	}()
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

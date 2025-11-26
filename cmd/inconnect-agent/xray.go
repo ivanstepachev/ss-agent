@@ -45,7 +45,7 @@ func (a *Agent) Reload(ctx context.Context, rotateReserved bool) (int, error) {
 		return processed, err
 	}
 
-	if err := a.docker.EnsureContainer(ctx, a.cfg); err != nil {
+	if err := a.docker.ApplyConfig(ctx, a.cfg); err != nil {
 		return processed, err
 	}
 
@@ -229,7 +229,7 @@ func (d *DockerManager) TestConfig(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-func (d *DockerManager) EnsureContainer(ctx context.Context, cfg Config) error {
+func (d *DockerManager) ApplyConfig(ctx context.Context, cfg Config) error {
 	exists, err := d.containerExists(ctx)
 	if err != nil {
 		return err
@@ -238,8 +238,11 @@ func (d *DockerManager) EnsureContainer(ctx context.Context, cfg Config) error {
 		log.Printf("docker container %s not found, creating", d.ContainerName)
 		return d.createContainer(ctx, cfg)
 	}
-	if err := d.restartContainer(ctx); err != nil {
-		return err
+	if err := d.sendSignal(ctx, "SIGUSR1"); err != nil {
+		log.Printf("failed to signal container %s, falling back to restart: %v", d.ContainerName, err)
+		if err := d.restartContainer(ctx); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -261,6 +264,14 @@ func (d *DockerManager) restartContainer(ctx context.Context) error {
 	args := []string{"restart", d.ContainerName}
 	if err := runCommand(ctx, d.Binary, args); err != nil {
 		return fmt.Errorf("restart container: %w", err)
+	}
+	return nil
+}
+
+func (d *DockerManager) sendSignal(ctx context.Context, signal string) error {
+	args := []string{"kill", "--signal", signal, d.ContainerName}
+	if err := runCommand(ctx, d.Binary, args); err != nil {
+		return fmt.Errorf("send signal %s: %w", signal, err)
 	}
 	return nil
 }
