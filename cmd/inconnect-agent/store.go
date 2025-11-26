@@ -11,11 +11,11 @@ import (
 )
 
 const (
-	slotStatusFree      = "free"
-	slotStatusUsed      = "used"
-	slotStatusReserved  = "reserved"
-	serverPSKPrefix     = "server_psk_shard_"
-	legacyServerPSKKey  = "server_psk"
+	slotStatusFree     = "free"
+	slotStatusUsed     = "used"
+	slotStatusReserved = "reserved"
+	serverPSKPrefix    = "server_psk_shard_"
+	legacyServerPSKKey = "server_psk"
 )
 
 var (
@@ -49,6 +49,12 @@ type Slot struct {
 	Password string
 	Status   string
 	UserID   sql.NullString
+}
+
+type SlotCounts struct {
+	Free     int `json:"free"`
+	Used     int `json:"used"`
+	Reserved int `json:"reserved"`
 }
 
 type SlotStore struct {
@@ -404,4 +410,43 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated
 
 func (s *SlotStore) ServerPassword(shardID int) string {
 	return s.serverPasswords[shardID]
+}
+
+func (s *SlotStore) SlotStats(ctx context.Context) (map[int]SlotCounts, SlotCounts, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT shard_id, status, COUNT(*)
+FROM slots
+GROUP BY shard_id, status`)
+	if err != nil {
+		return nil, SlotCounts{}, fmt.Errorf("select slot stats: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[int]SlotCounts)
+	var totals SlotCounts
+	for rows.Next() {
+		var shardID int
+		var status string
+		var count int
+		if err := rows.Scan(&shardID, &status, &count); err != nil {
+			return nil, SlotCounts{}, fmt.Errorf("scan slot stats: %w", err)
+		}
+		c := counts[shardID]
+		switch status {
+		case slotStatusFree:
+			c.Free += count
+			totals.Free += count
+		case slotStatusUsed:
+			c.Used += count
+			totals.Used += count
+		case slotStatusReserved:
+			c.Reserved += count
+			totals.Reserved += count
+		}
+		counts[shardID] = c
+	}
+	if err := rows.Err(); err != nil {
+		return nil, SlotCounts{}, fmt.Errorf("iterate slot stats: %w", err)
+	}
+	return counts, totals, nil
 }

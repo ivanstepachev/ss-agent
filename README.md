@@ -86,8 +86,7 @@ WantedBy=multi-user.target
   - `listenPort` — фактический порт Shadowsocks (общий для всех клиентов);
   - `slotId` — идентификатор слота (его же нужно передавать в `/deleteuser`);
   - `password` — значение формата `<server_psk>:<client_psk>` (можно вставлять прямо в клиент);
-  - `method`, `ip`.
-
+  - `freeSlots` и `freeSlotsByShard` — текущий остаток свободных слотов по всем шардовым контейнерам.
 - `/deleteuser`
   ```bash
   curl -XPOST -H "Content-Type: application/json" \
@@ -118,6 +117,22 @@ WantedBy=multi-user.target
   curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/restart
   ```
   Пересобирает конфиг так же, как `/reload`, и сразу выполняет **полный рестарт** шардов (или конкретного, если передать `{"shardId":2}`), чтобы мгновенно сбросить все текущие TCP/UDP соединения.
+
+- `/stats` (GET)
+  ```bash
+  curl -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/stats
+  ```
+  Возвращает состояние каждого шарда и суммарные показатели:
+  ```json
+  {
+    "shards": [
+      {"id":1,"port":50010,"free":498,"used":2,"reserved":0},
+      ...
+    ],
+    "totals":{"free":3980,"used":20,"reserved":0}
+  }
+  ```
+  Доступно только при предъявлении `X-Auth-Token`.
 
 `/healthz` — GET, возвращает `{"status":"ok"}`; нужен для проверок живости.
 

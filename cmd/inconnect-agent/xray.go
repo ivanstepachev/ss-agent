@@ -21,6 +21,7 @@ type Agent struct {
 	shards   []ShardDefinition
 	shardMap map[int]ShardDefinition
 	reloadM  sync.Mutex
+	opLock   sync.RWMutex
 }
 
 func NewAgent(cfg Config, shards []ShardDefinition, store *SlotStore, docker *DockerManager) *Agent {
@@ -61,6 +62,9 @@ func (a *Agent) ReloadAndRestart(ctx context.Context, rotateReserved bool, targe
 }
 
 func (a *Agent) reload(ctx context.Context, rotateReserved bool, target []int, hardRestart bool) (map[int]int, error) {
+	a.opLock.Lock()
+	defer a.opLock.Unlock()
+
 	a.reloadM.Lock()
 	defer a.reloadM.Unlock()
 

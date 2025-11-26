@@ -18,6 +18,7 @@ func (a *Agent) Router() http.Handler {
 	mux.Handle("/deleteuser", a.wrap(a.handleDeleteUser))
 	mux.Handle("/reload", a.wrap(a.handleReload))
 	mux.Handle("/restart", a.wrap(a.handleRestart))
+	mux.HandleFunc("/stats", a.handleStats)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -41,6 +42,9 @@ func (a *Agent) wrap(handler httpHandler) http.Handler {
 }
 
 func (a *Agent) handleAddUser(w http.ResponseWriter, r *http.Request) {
+	a.opLock.RLock()
+	defer a.opLock.RUnlock()
+
 	var req struct {
 		UserID string `json:"user_id"`
 	}
@@ -63,19 +67,35 @@ func (a *Agent) handleAddUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "unknown_shard")
 		return
 	}
+	statsByShard, totals, err := a.store.SlotStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stats_error")
+		return
+	}
+
+	freeByShard := make(map[int]int, len(statsByShard))
+	for _, sh := range a.shards {
+		freeByShard[sh.ID] = statsByShard[sh.ID].Free
+	}
+
 	resp := map[string]any{
-		"status":     "ok",
-		"slotId":     slot.ID,
-		"shardId":    shard.ID,
-		"listenPort": shard.Port,
-		"password":   fmt.Sprintf("%s:%s", a.store.ServerPassword(shard.ID), slot.Password),
-		"method":     a.cfg.Method,
-		"ip":         a.cfg.PublicIP,
+		"status":           "ok",
+		"slotId":           slot.ID,
+		"shardId":          shard.ID,
+		"listenPort":       shard.Port,
+		"password":         fmt.Sprintf("%s:%s", a.store.ServerPassword(shard.ID), slot.Password),
+		"method":           a.cfg.Method,
+		"ip":               a.cfg.PublicIP,
+		"freeSlots":        totals.Free,
+		"freeSlotsByShard": freeByShard,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (a *Agent) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	a.opLock.RLock()
+	defer a.opLock.RUnlock()
+
 	var req struct {
 		SlotID  int   `json:"slotId"`
 		SlotIDs []int `json:"slotIds"`
@@ -169,6 +189,60 @@ func (a *Agent) handleRestart(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("async restart finished: %+v", processed)
 	}()
+}
+
+func (a *Agent) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	if a.cfg.AuthToken != "" {
+		if got := r.Header.Get("X-Auth-Token"); got != a.cfg.AuthToken {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+	}
+
+	a.opLock.RLock()
+	defer a.opLock.RUnlock()
+
+	statsByShard, totals, err := a.store.SlotStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stats_error")
+		return
+	}
+
+	resp := struct {
+		Shards []struct {
+			ID       int `json:"id"`
+			Port     int `json:"port"`
+			Free     int `json:"free"`
+			Used     int `json:"used"`
+			Reserved int `json:"reserved"`
+		} `json:"shards"`
+		Totals SlotCounts `json:"totals"`
+	}{
+		Totals: totals,
+	}
+
+	for _, shard := range a.shards {
+		counts := statsByShard[shard.ID]
+		resp.Shards = append(resp.Shards, struct {
+			ID       int `json:"id"`
+			Port     int `json:"port"`
+			Free     int `json:"free"`
+			Used     int `json:"used"`
+			Reserved int `json:"reserved"`
+		}{
+			ID:       shard.ID,
+			Port:     shard.Port,
+			Free:     counts.Free,
+			Used:     counts.Used,
+			Reserved: counts.Reserved,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
