@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	slotStatusFree     = "free"
-	slotStatusUsed     = "used"
-	slotStatusReserved = "reserved"
-	serverPSKPrefix    = "server_psk_shard_"
+	slotStatusFree      = "free"
+	slotStatusUsed      = "used"
+	slotStatusReserved  = "reserved"
+	serverPSKPrefix     = "server_psk_shard_"
+	legacyServerPSKKey  = "server_psk"
 )
 
 var (
@@ -157,7 +158,11 @@ WHERE port BETWEEN ? AND ?`,
 func (s *SlotStore) ensureServerPasswords(ctx context.Context, shards []ShardDefinition) error {
 	for _, sh := range shards {
 		key := fmt.Sprintf("%s%d", serverPSKPrefix, sh.ID)
-		psk, err := s.ensureServerPassword(ctx, key)
+		var fallback string
+		if sh.ID == 1 {
+			fallback = legacyServerPSKKey
+		}
+		psk, err := s.ensureServerPassword(ctx, key, fallback)
 		if err != nil {
 			return err
 		}
@@ -346,9 +351,17 @@ func generatePassword() (string, error) {
 	return base64.StdEncoding.EncodeToString(buf), nil
 }
 
-func (s *SlotStore) ensureServerPassword(ctx context.Context, key string) (string, error) {
-	var value string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM metadata WHERE key = ?`, key).Scan(&value)
+func (s *SlotStore) ensureServerPassword(ctx context.Context, key, legacy string) (string, error) {
+	load := func(k string) (string, error) {
+		var value string
+		err := s.db.QueryRowContext(ctx, `SELECT value FROM metadata WHERE key = ?`, k).Scan(&value)
+		if err != nil {
+			return "", err
+		}
+		return value, nil
+	}
+
+	value, err := load(key)
 	if err == nil {
 		return value, nil
 	}
@@ -356,19 +369,37 @@ func (s *SlotStore) ensureServerPassword(ctx context.Context, key string) (strin
 		return "", fmt.Errorf("load server password for %s: %w", key, err)
 	}
 
+	if legacy != "" {
+		if legacyValue, legacyErr := load(legacy); legacyErr == nil {
+			if err := s.upsertServerPassword(ctx, key, legacyValue); err != nil {
+				return "", err
+			}
+			return legacyValue, nil
+		} else if legacyErr != nil && !errors.Is(legacyErr, sql.ErrNoRows) {
+			return "", fmt.Errorf("load legacy server password %s: %w", legacy, legacyErr)
+		}
+	}
+
 	psk, err := generatePassword()
 	if err != nil {
 		return "", fmt.Errorf("generate server password: %w", err)
 	}
+	if err := s.upsertServerPassword(ctx, key, psk); err != nil {
+		return "", err
+	}
+	return psk, nil
+}
+
+func (s *SlotStore) upsertServerPassword(ctx context.Context, key, value string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := s.db.ExecContext(ctx, `
 INSERT INTO metadata (key, value, updated_at)
 VALUES (?, ?, ?)
 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
-		key, psk, now); err != nil {
-		return "", fmt.Errorf("store server password for %s: %w", key, err)
+		key, value, now); err != nil {
+		return fmt.Errorf("store server password for %s: %w", key, err)
 	}
-	return psk, nil
+	return nil
 }
 
 func (s *SlotStore) ServerPassword(shardID int) string {

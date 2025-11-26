@@ -202,7 +202,7 @@ func buildXrayConfig(slots []Slot, shard ShardDefinition, cfg Config, serverPass
 			email = slot.UserID.String
 		}
 		clients = append(clients, ssClient{
-			Password: fmt.Sprintf("%s:%s", serverPassword, slot.Password),
+			Password: slot.Password,
 			Email:    email,
 		})
 	}
