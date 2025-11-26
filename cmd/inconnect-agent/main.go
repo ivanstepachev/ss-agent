@@ -57,6 +57,7 @@ func main() {
 		Binary: cfg.DockerBinary,
 		Image:  cfg.DockerImage,
 	}
+	cleanupContainers(ctx, dockerManager, cfg, shards)
 	agent := NewAgent(cfg, shards, store, dockerManager)
 
 	if _, err := agent.Reload(ctx, false, nil); err != nil {
@@ -106,4 +107,18 @@ func ensureParentDir(filePath string) error {
 		return nil
 	}
 	return os.MkdirAll(dir, 0o755)
+}
+
+func cleanupContainers(ctx context.Context, docker *DockerManager, cfg Config, shards []ShardDefinition) {
+	// remove legacy single-container instance if present
+	if cfg.ContainerName != "" {
+		if err := docker.RemoveIfExists(ctx, cfg.ContainerName); err != nil {
+			log.Printf("failed to remove legacy container %s: %v", cfg.ContainerName, err)
+		}
+	}
+	for _, shard := range shards {
+		if err := docker.RemoveIfExists(ctx, shard.ContainerName); err != nil {
+			log.Printf("failed to remove shard container %s: %v", shard.ContainerName, err)
+		}
+	}
 }

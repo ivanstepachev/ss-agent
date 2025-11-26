@@ -400,6 +400,21 @@ func (d *DockerManager) createContainer(ctx context.Context, cfg Config, shard S
 	return nil
 }
 
+func (d *DockerManager) RemoveIfExists(ctx context.Context, name string) error {
+	exists, err := d.containerExists(ctx, name)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	args := []string{"rm", "-f", name}
+	if err := runCommand(ctx, d.Binary, args); err != nil {
+		return fmt.Errorf("remove container %s: %w", name, err)
+	}
+	return nil
+}
+
 type commandError struct {
 	Cmd      string
 	Args     []string
