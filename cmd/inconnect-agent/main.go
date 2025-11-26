@@ -64,8 +64,8 @@ func main() {
 		log.Fatalf("initial config generation failed: %v", err)
 	}
 
-	if cfg.ReloadSeconds > 0 {
-		agent.StartAutoReload(ctx, time.Duration(cfg.ReloadSeconds)*time.Second)
+	if cfg.RestartSeconds > 0 {
+		agent.StartAutoRestart(ctx, time.Duration(cfg.RestartSeconds)*time.Second)
 	}
 
 	server := &http.Server{

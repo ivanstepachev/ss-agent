@@ -25,7 +25,7 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | `-shard-port-step` | Разница между портами шардов | `1` |
 | `-shards` | Явное описание `port:slots,...` (перекрывает предыдущие) | пусто |
 | `-shard-prefix` | Префикс для имён контейнеров | `xray-ss2022` |
-| `-reload-interval` | Авто-релоад раз в N секунд (0 = выкл) | `0` |
+| `-restart-interval` | Авто-рестарт (с пересборкой) раз в N секунд (0 = выкл) | `0` |
 | `-public-ip` | IP, отдаваемый в `/adduser` | пусто |
 | `-auth-token` | Требуемый заголовок `X-Auth-Token` | пусто (без авторизации) |
 | `-docker-image` | Образ Xray | `teddysun/xray:latest` |
@@ -138,7 +138,7 @@ sudo REPO_URL=https://github.com/your-org/inconnect-agent.git \
      SHARD_SIZE=500 \
      MIN_PORT=50010 \
      SHARD_PORT_STEP=10 \
-     RELOAD_INTERVAL=600 \
+     RESTART_INTERVAL=600 \
      ./scripts/install.sh
 ```
 Дополнительные переменные:
@@ -146,7 +146,7 @@ sudo REPO_URL=https://github.com/your-org/inconnect-agent.git \
 - `SHARD_PORT_STEP` — шаг между портами шардов (пример выше: 50010, 50020, ...).
 - `SHARDS` — явный список `port:slots,...`, если нужно задать разные размеры.
 - `SHARD_PREFIX` — как именовать контейнеры (по умолчанию `xray-ss2022` → `xray-ss2022-1`, `-2`, ...).
-- `RELOAD_INTERVAL` — как часто автоматически запускать `/reload` (в секундах, 0 = отключено).
+- `RESTART_INTERVAL` — как часто автоматически запускать `/restart` (в секундах, 0 = отключено).
 Полный список см. в начале скрипта (можно задавать и `BRANCH`, `INSTALL_DIR`, `DB_PATH`, `CONFIG_DIR`, и т.д.).
 
 ### Быстрое тестирование без удалённого репозитория
@@ -190,5 +190,5 @@ sudo LOCAL_SOURCE_DIR=$PWD \
 - В БД автоматически создаётся таблица `metadata` с серверным паролем (`server_psk`) для единого inbound-а. При первом запуске значение генерируется и сохраняется.
 - `min-port` определяет фактический порт прослушки Shadowsocks. `max-port` задаёт количество слотов (например, `50001–50250` = 250 слотов).
 - Все слоты (даже `free`) присутствуют в конфиге как `clients`, поэтому `/adduser` не требует reload. Ответ содержит `slotId`, `shardId`, `listenPort` и готовый пароль `<server_psk>:<client_psk>`.
-- При нескольких шардах reload выполняется по очереди для каждого контейнера. Можно запускать часто (например, каждые 5–10 минут) или задать `-reload-interval`, чтобы агент делал это автоматически.
 - `/reload` асинхронный: HTTP-ответ приходит сразу, а прогресс виден в `journalctl -u inconnect-agent`.
+- `/restart` пересобирает конфиг и делает `docker restart` шардов; можно запускать вручную или настроить авто-каскад через `-restart-interval`.

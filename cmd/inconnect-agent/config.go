@@ -11,49 +11,49 @@ import (
 
 // Config captures all runtime configuration for the agent.
 type Config struct {
-	DBPath        string
-	MinPort       int
-	MaxPort       int
-	ConfigDir     string
-	ConfigFile    string
-	GeneratedFile string
-	ListenAddr    string
-	PublicIP      string
-	AuthToken     string
-	ContainerName string
-	DockerImage   string
-	DockerBinary  string
-	Method        string
-	APIPort       int
-	ShardCount    int
-	ShardSize     int
-	ShardPortStep int
-	ShardRaw      string
-	ShardPrefix   string
-	ReloadSeconds int
+	DBPath         string
+	MinPort        int
+	MaxPort        int
+	ConfigDir      string
+	ConfigFile     string
+	GeneratedFile  string
+	ListenAddr     string
+	PublicIP       string
+	AuthToken      string
+	ContainerName  string
+	DockerImage    string
+	DockerBinary   string
+	Method         string
+	APIPort        int
+	ShardCount     int
+	ShardSize      int
+	ShardPortStep  int
+	ShardRaw       string
+	ShardPrefix    string
+	RestartSeconds int
 }
 
 func defaultConfig() Config {
 	return Config{
-		DBPath:        "/var/lib/inconnect-agent/ports.db",
-		MinPort:       50001,
-		MaxPort:       50250,
-		ConfigDir:     "/etc/xray",
-		ConfigFile:    "config.json",
-		GeneratedFile: "config.generated.json",
-		ListenAddr:    "127.0.0.1:8080",
-		PublicIP:      "",
-		AuthToken:     "",
-		ContainerName: "xray-ss2022",
-		DockerImage:   "teddysun/xray:latest",
-		DockerBinary:  "docker",
-		Method:        "2022-blake3-aes-128-gcm",
-		APIPort:       10085,
-		ShardCount:    1,
-		ShardSize:     0,
-		ShardPortStep: 1,
-		ShardPrefix:   "xray-ss2022",
-		ReloadSeconds: 0,
+		DBPath:         "/var/lib/inconnect-agent/ports.db",
+		MinPort:        50001,
+		MaxPort:        50250,
+		ConfigDir:      "/etc/xray",
+		ConfigFile:     "config.json",
+		GeneratedFile:  "config.generated.json",
+		ListenAddr:     "127.0.0.1:8080",
+		PublicIP:       "",
+		AuthToken:      "",
+		ContainerName:  "xray-ss2022",
+		DockerImage:    "teddysun/xray:latest",
+		DockerBinary:   "docker",
+		Method:         "2022-blake3-aes-128-gcm",
+		APIPort:        10085,
+		ShardCount:     1,
+		ShardSize:      0,
+		ShardPortStep:  1,
+		ShardPrefix:    "xray-ss2022",
+		RestartSeconds: 0,
 	}
 }
 
@@ -77,7 +77,7 @@ func (c *Config) registerFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.ShardPortStep, "shard-port-step", c.ShardPortStep, "Port increment between shards")
 	fs.StringVar(&c.ShardRaw, "shards", c.ShardRaw, "Custom shard definitions port:slots,... (overrides shard-count)")
 	fs.StringVar(&c.ShardPrefix, "shard-prefix", c.ShardPrefix, "Prefix for shard container names")
-	fs.IntVar(&c.ReloadSeconds, "reload-interval", c.ReloadSeconds, "Automatic reload interval in seconds (0 disables)")
+	fs.IntVar(&c.RestartSeconds, "restart-interval", c.RestartSeconds, "Automatic restart interval in seconds (0 disables)")
 }
 
 func (c Config) validate() error {

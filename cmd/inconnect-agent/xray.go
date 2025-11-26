@@ -145,7 +145,7 @@ func (a *Agent) reloadShard(ctx context.Context, shard ShardDefinition, rotate b
 	return processed, nil
 }
 
-func (a *Agent) StartAutoReload(ctx context.Context, interval time.Duration) {
+func (a *Agent) StartAutoRestart(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		return
 	}
@@ -155,8 +155,8 @@ func (a *Agent) StartAutoReload(ctx context.Context, interval time.Duration) {
 		for {
 			select {
 			case <-ticker.C:
-				if _, err := a.Reload(context.Background(), true, nil); err != nil {
-					log.Printf("auto reload failed: %v", err)
+				if _, err := a.ReloadAndRestart(context.Background(), true, nil); err != nil {
+					log.Printf("auto restart failed: %v", err)
 				}
 			case <-ctx.Done():
 				return
