@@ -46,7 +46,7 @@ apt_install() {
   log "Installing OS dependencies..."
   apt-get update -y
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    git golang-go docker.io curl
+    git golang-go docker.io curl rsync
 }
 
 setup_user() {
@@ -62,13 +62,30 @@ setup_user() {
   usermod -aG docker "$SERVICE_USER" || true
 }
 
+LOCAL_SOURCE_DIR="${LOCAL_SOURCE_DIR:-}"
+
 fetch_repo() {
+  if [[ -n "$LOCAL_SOURCE_DIR" ]]; then
+    if [[ ! -d "$LOCAL_SOURCE_DIR" ]]; then
+      echo "LOCAL_SOURCE_DIR '$LOCAL_SOURCE_DIR' does not exist" >&2
+      exit 1
+    fi
+    log "Copying source from ${LOCAL_SOURCE_DIR}..."
+    rm -rf "$INSTALL_DIR"
+    install -d -m 0755 "$INSTALL_DIR"
+    rsync -a --delete "${LOCAL_SOURCE_DIR}/" "${INSTALL_DIR}/"
+    return
+  fi
   if [[ -d "$INSTALL_DIR/.git" ]]; then
     log "Updating repository in $INSTALL_DIR..."
     git -C "$INSTALL_DIR" fetch origin
     git -C "$INSTALL_DIR" checkout "$BRANCH"
     git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH"
   else
+    if [[ "$REPO_URL" == "https://example.com/inconnect-agent.git" ]]; then
+      echo "ERROR: REPO_URL is still the placeholder. Set REPO_URL or LOCAL_SOURCE_DIR." >&2
+      exit 1
+    fi
     log "Cloning repository..."
     rm -rf "$INSTALL_DIR"
     install -d -m 0755 "$(dirname "$INSTALL_DIR")"

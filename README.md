@@ -109,6 +109,16 @@ sudo REPO_URL=https://github.com/your-org/inconnect-agent.git \
 ```
 Доступные переменные: `BRANCH`, `INSTALL_DIR`, `MIN_PORT`, `MAX_PORT`, `DOCKER_IMAGE`, `LISTEN_ADDR`, `DB_PATH`, `CONFIG_DIR`, и т.д. — см. начало скрипта.
 
+### Быстрое тестирование без удалённого репозитория
+Если код находится уже на сервере, можно пропустить `git clone`, указав `LOCAL_SOURCE_DIR` (скрипт просто скопирует текущую директорию):
+```bash
+sudo LOCAL_SOURCE_DIR=$PWD \
+     PUBLIC_IP=203.0.113.10 \
+     AUTH_TOKEN=SECRET \
+     ./scripts/install.sh
+```
+Это удобно для проверки свежих сборок до того, как они попадут в GitHub.
+
 ## Примечания
 - `ports.db` использует WAL и блокировки SQLite (`_busy_timeout=5000`), поэтому агент рассчитан на единственный экземпляр.
 - Порты, находящиеся в статусе `used`, всегда присутствуют в конфиге с тем же паролем; `/adduser` не требует перезагрузки.
