@@ -73,7 +73,7 @@ fetch_repo() {
     log "Copying source from ${LOCAL_SOURCE_DIR}..."
     rm -rf "$INSTALL_DIR"
     install -d -m 0755 "$INSTALL_DIR"
-    rsync -a --delete "${LOCAL_SOURCE_DIR}/" "${INSTALL_DIR}/"
+    rsync -a --exclude '.git' "${LOCAL_SOURCE_DIR}/" "${INSTALL_DIR}/"
     return
   fi
   if [[ -d "$INSTALL_DIR/.git" ]]; then
