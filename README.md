@@ -23,7 +23,7 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | `-min-port`, `-max-port` | Диапазон SS2022 портов | `50001–50250` |
 | `-public-ip` | IP, отдаваемый в `/adduser` | пусто |
 | `-auth-token` | Требуемый заголовок `X-Auth-Token` | пусто (без авторизации) |
-| `-docker-image` | Образ Xray | `xray:latest` |
+| `-docker-image` | Образ Xray | `teddysun/xray:latest` |
 | `-container-name` | Имя Docker-контейнера | `xray-ss2022` |
 | `-config-dir` | Каталог с `config.json` | `/etc/xray` |
 

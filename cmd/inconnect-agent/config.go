@@ -37,7 +37,7 @@ func defaultConfig() Config {
 		PublicIP:      "",
 		AuthToken:     "",
 		ContainerName: "xray-ss2022",
-		DockerImage:   "xray:latest",
+		DockerImage:   "teddysun/xray:latest",
 		DockerBinary:  "docker",
 		Method:        "2022-blake3-aes-128-gcm",
 		APIPort:       10085,
