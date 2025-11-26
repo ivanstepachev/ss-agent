@@ -75,8 +75,10 @@ WantedBy=multi-user.target
   ```
   Ответ содержит:
   - `listenPort` — фактический порт Shadowsocks (общий для всех клиентов);
+  - `serverPassword` — серверный PSK (общий);
   - `port` — идентификатор слота (его же нужно передавать в `/deleteuser`);
-  - `password`, `method`, `ip`.
+  - `password` — индивидуальный клиентский ключ; на клиенте пароль = `serverPassword:password`;
+  - `method`, `ip`.
 
 - `/deleteuser`
   ```bash
@@ -151,4 +153,5 @@ sudo LOCAL_SOURCE_DIR=$PWD \
 - В БД автоматически создаётся таблица `metadata` с серверным паролем (`server_psk`) для единого inbound-а. При первом запуске значение генерируется и сохраняется.
 - `min-port` определяет фактический порт прослушки Shadowsocks. `max-port` задаёт количество слотов (например, `50001–50250` = 250 слотов).
 - Все слоты (даже `free`) присутствуют в конфиге как `clients`, поэтому `/adduser` не требует reload.
+- Для клиентов SS2022 пароль формируется как `<serverPassword>:<password>` (пример: `SERVER_PSK:USER_PSK`).
 - `/reload` асинхронный: HTTP-ответ приходит сразу, а прогресс виден в `journalctl -u inconnect-agent`.
