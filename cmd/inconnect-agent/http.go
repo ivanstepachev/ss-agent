@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -57,13 +58,12 @@ func (a *Agent) handleAddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{
-		"status":         "ok",
-		"port":           slot.Port,
-		"listenPort":     a.cfg.MinPort,
-		"password":       slot.Password,
-		"serverPassword": a.store.ServerPassword(),
-		"method":         a.cfg.Method,
-		"ip":             a.cfg.PublicIP,
+		"status":     "ok",
+		"slotId":     slot.Port,
+		"listenPort": a.cfg.MinPort,
+		"password":   fmt.Sprintf("%s:%s", a.store.ServerPassword(), slot.Password),
+		"method":     a.cfg.Method,
+		"ip":         a.cfg.PublicIP,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
