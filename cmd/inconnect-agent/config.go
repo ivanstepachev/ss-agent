@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 // Config captures all runtime configuration for the agent.
@@ -23,6 +25,12 @@ type Config struct {
 	DockerBinary  string
 	Method        string
 	APIPort       int
+	ShardCount    int
+	ShardSize     int
+	ShardPortStep int
+	ShardRaw      string
+	ShardPrefix   string
+	ReloadSeconds int
 }
 
 func defaultConfig() Config {
@@ -41,6 +49,11 @@ func defaultConfig() Config {
 		DockerBinary:  "docker",
 		Method:        "2022-blake3-aes-128-gcm",
 		APIPort:       10085,
+		ShardCount:    1,
+		ShardSize:     0,
+		ShardPortStep: 1,
+		ShardPrefix:   "xray-ss2022",
+		ReloadSeconds: 0,
 	}
 }
 
@@ -54,11 +67,17 @@ func (c *Config) registerFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.ListenAddr, "listen", c.ListenAddr, "HTTP listen address")
 	fs.StringVar(&c.PublicIP, "public-ip", c.PublicIP, "Public IP exposed in /adduser responses")
 	fs.StringVar(&c.AuthToken, "auth-token", c.AuthToken, "Optional X-Auth-Token required for requests")
-	fs.StringVar(&c.ContainerName, "container-name", c.ContainerName, "Docker container name for Xray")
+	fs.StringVar(&c.ContainerName, "container-name", c.ContainerName, "Docker container name (legacy single-shard)")
 	fs.StringVar(&c.DockerImage, "docker-image", c.DockerImage, "Docker image to use for Xray runs")
 	fs.StringVar(&c.DockerBinary, "docker-binary", c.DockerBinary, "Docker binary path")
 	fs.StringVar(&c.Method, "method", c.Method, "Shadowsocks 2022 cipher method")
 	fs.IntVar(&c.APIPort, "api-port", c.APIPort, "Xray API inbound port")
+	fs.IntVar(&c.ShardCount, "shard-count", c.ShardCount, "Number of Xray shards (containers)")
+	fs.IntVar(&c.ShardSize, "shard-size", c.ShardSize, "Slots per shard (defaults to total slot count)")
+	fs.IntVar(&c.ShardPortStep, "shard-port-step", c.ShardPortStep, "Port increment between shards")
+	fs.StringVar(&c.ShardRaw, "shards", c.ShardRaw, "Custom shard definitions port:slots,... (overrides shard-count)")
+	fs.StringVar(&c.ShardPrefix, "shard-prefix", c.ShardPrefix, "Prefix for shard container names")
+	fs.IntVar(&c.ReloadSeconds, "reload-interval", c.ReloadSeconds, "Automatic reload interval in seconds (0 disables)")
 }
 
 func (c Config) validate() error {
@@ -93,4 +112,113 @@ func (c Config) generatedConfigPath() string {
 
 func (c Config) activeConfigPath() string {
 	return filepath.Join(c.ConfigDir, c.ConfigFile)
+}
+
+type ShardDefinition struct {
+	ID            int
+	Port          int
+	SlotCount     int
+	ContainerName string
+	APIPort       int
+}
+
+func (c Config) shardConfigPath(shardID int) string {
+	name := fmt.Sprintf("config-shard-%d.json", shardID)
+	return filepath.Join(c.ConfigDir, name)
+}
+
+func (c Config) shardGeneratedPath(shardID int) string {
+	name := fmt.Sprintf("config-shard-%d.generated.json", shardID)
+	return filepath.Join(c.ConfigDir, name)
+}
+
+func (c Config) shardContainer(shardID int) string {
+	return fmt.Sprintf("%s-%d", c.ShardPrefix, shardID)
+}
+
+func (c Config) shardAPIPortFor(id int) int {
+	if c.APIPort == 0 {
+		return 0
+	}
+	return c.APIPort + id - 1
+}
+
+func (c Config) defaultShardSize() int {
+	if c.ShardSize > 0 {
+		return c.ShardSize
+	}
+	return c.portCount()
+}
+
+func (c Config) defaultShardCount() int {
+	if c.ShardCount > 0 {
+		return c.ShardCount
+	}
+	return 1
+}
+
+func (c Config) shardsFromRaw() ([]ShardDefinition, error) {
+	if strings.TrimSpace(c.ShardRaw) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(c.ShardRaw, ",")
+	var defs []ShardDefinition
+	for idx, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		sub := strings.Split(part, ":")
+		if len(sub) != 2 {
+			return nil, fmt.Errorf("invalid shard format %q, expected port:slots", part)
+		}
+		port, err := strconv.Atoi(sub[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid shard port %q: %w", sub[0], err)
+		}
+		slots, err := strconv.Atoi(sub[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid shard slot count %q: %w", sub[1], err)
+		}
+		if slots <= 0 {
+			return nil, fmt.Errorf("shard slots must be positive for %q", part)
+		}
+		defs = append(defs, ShardDefinition{
+			ID:            idx + 1,
+			Port:          port,
+			SlotCount:     slots,
+			ContainerName: c.shardContainer(idx + 1),
+			APIPort:       c.shardAPIPortFor(idx + 1),
+		})
+	}
+	if len(defs) == 0 {
+		return nil, errors.New("no valid shard definitions provided")
+	}
+	return defs, nil
+}
+
+func (c Config) BuildShards() ([]ShardDefinition, error) {
+	if defs, err := c.shardsFromRaw(); err != nil {
+		return nil, err
+	} else if defs != nil {
+		return defs, nil
+	}
+	size := c.defaultShardSize()
+	count := c.defaultShardCount()
+	if size <= 0 || count <= 0 {
+		return nil, errors.New("invalid shard size/count configuration")
+	}
+	var defs []ShardDefinition
+	for i := 0; i < count; i++ {
+		id := i + 1
+		port := c.MinPort + i*c.ShardPortStep
+		defs = append(defs, ShardDefinition{
+			ID:            id,
+			Port:          port,
+			SlotCount:     size,
+			ContainerName: c.shardContainer(id),
+			APIPort:       c.shardAPIPortFor(id),
+		})
+	}
+	return defs, nil
 }

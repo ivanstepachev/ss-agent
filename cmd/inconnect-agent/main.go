@@ -41,21 +41,30 @@ func main() {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	ctx := context.Background()
+	shards, err := cfg.BuildShards()
+	if err != nil {
+		log.Fatalf("invalid shard configuration: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	store := NewSlotStore(db)
-	if err := store.Init(ctx, cfg); err != nil {
+	if err := store.Init(ctx, cfg, shards); err != nil {
 		log.Fatalf("initialize store: %v", err)
 	}
 
 	dockerManager := &DockerManager{
-		Binary:        cfg.DockerBinary,
-		Image:         cfg.DockerImage,
-		ContainerName: cfg.ContainerName,
+		Binary: cfg.DockerBinary,
+		Image:  cfg.DockerImage,
 	}
-	agent := NewAgent(cfg, store, dockerManager)
+	agent := NewAgent(cfg, shards, store, dockerManager)
 
-	if _, err := agent.Reload(ctx, false); err != nil {
+	if _, err := agent.Reload(ctx, false, nil); err != nil {
 		log.Fatalf("initial config generation failed: %v", err)
+	}
+
+	if cfg.ReloadSeconds > 0 {
+		agent.StartAutoReload(ctx, time.Duration(cfg.ReloadSeconds)*time.Second)
 	}
 
 	server := &http.Server{
@@ -73,17 +82,18 @@ func main() {
 		}
 	}()
 
-	waitForShutdown(server)
+	waitForShutdown(server, cancel)
 }
 
-func waitForShutdown(server *http.Server) {
+func waitForShutdown(server *http.Server, cancel context.CancelFunc) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	log.Printf("received signal %s, shutting down", sig)
+	cancel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelShutdown()
 
 	if err := server.Shutdown(ctx); err != nil {
 		log.Printf("graceful shutdown failed: %v", err)

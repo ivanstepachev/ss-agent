@@ -14,7 +14,7 @@ const (
 	slotStatusFree     = "free"
 	slotStatusUsed     = "used"
 	slotStatusReserved = "reserved"
-	serverPasswordKey  = "server_psk"
+	serverPSKPrefix    = "server_psk_shard_"
 )
 
 var (
@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS slots (
     status          TEXT NOT NULL,
     user_id         TEXT,
     created_at      DATETIME NOT NULL,
-    updated_at      DATETIME NOT NULL
+    updated_at      DATETIME NOT NULL,
+    shard_id        INTEGER NOT NULL DEFAULT 1
 );`
 	metadataSchema = `
 CREATE TABLE IF NOT EXISTS metadata (
@@ -40,68 +41,127 @@ CREATE TABLE IF NOT EXISTS metadata (
 );`
 )
 
-// Slot represents a single port allocation entry.
+// Slot represents a single allocation entry.
 type Slot struct {
-	Port     int
+	ID       int
+	ShardID  int
 	Password string
 	Status   string
 	UserID   sql.NullString
 }
 
 type SlotStore struct {
-	db             *sql.DB
-	serverPassword string
+	db              *sql.DB
+	serverPasswords map[int]string
 }
 
 func NewSlotStore(db *sql.DB) *SlotStore {
-	return &SlotStore{db: db}
+	return &SlotStore{
+		db:              db,
+		serverPasswords: make(map[int]string),
+	}
 }
 
-func (s *SlotStore) Init(ctx context.Context, cfg Config) error {
+func (s *SlotStore) Init(ctx context.Context, cfg Config, shards []ShardDefinition) error {
 	if _, err := s.db.ExecContext(ctx, schemaStatement); err != nil {
 		return fmt.Errorf("create schema: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, metadataSchema); err != nil {
 		return fmt.Errorf("create metadata schema: %w", err)
 	}
-	psk, err := s.ensureServerPassword(ctx)
-	if err != nil {
+	if err := s.ensureShardColumn(ctx); err != nil {
 		return err
 	}
-	s.serverPassword = psk
-	return s.ensureSlots(ctx, cfg.MinPort, cfg.MaxPort)
+	if err := s.ensureSlots(ctx, shards); err != nil {
+		return err
+	}
+	return s.ensureServerPasswords(ctx, shards)
 }
 
-func (s *SlotStore) ensureSlots(ctx context.Context, minPort, maxPort int) error {
+func (s *SlotStore) ensureShardColumn(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(slots)`)
+	if err != nil {
+		return fmt.Errorf("table info: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan table info: %w", err)
+		}
+		if name == "shard_id" {
+			return nil
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE slots ADD COLUMN shard_id INTEGER NOT NULL DEFAULT 1`); err != nil {
+		return fmt.Errorf("add shard_id column: %w", err)
+	}
+	return nil
+}
+
+func (s *SlotStore) ensureSlots(ctx context.Context, shards []ShardDefinition) error {
+	total := 0
+	for _, sh := range shards {
+		total += sh.SlotCount
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin seed tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	for port := minPort; port <= maxPort; port++ {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for slotID := 1; slotID <= total; slotID++ {
 		pwd, err := generatePassword()
 		if err != nil {
 			return fmt.Errorf("generate password: %w", err)
 		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
 		if _, err := tx.ExecContext(
 			ctx,
-			`INSERT INTO slots (port, password, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?)
+			`INSERT INTO slots (port, password, status, created_at, updated_at, shard_id)
+             VALUES (?, ?, ?, ?, ?, 1)
              ON CONFLICT(port) DO NOTHING`,
-			port,
+			slotID,
 			pwd,
 			slotStatusFree,
 			now,
 			now,
 		); err != nil {
-			return fmt.Errorf("seed port %d: %w", port, err)
+			return fmt.Errorf("seed slot %d: %w", slotID, err)
 		}
+	}
+
+	offset := 0
+	for _, sh := range shards {
+		start := offset + 1
+		end := offset + sh.SlotCount
+		if _, err := tx.ExecContext(ctx, `
+UPDATE slots
+SET shard_id = ?
+WHERE port BETWEEN ? AND ?`,
+			sh.ID, start, end); err != nil {
+			return fmt.Errorf("assign shard %d: %w", sh.ID, err)
+		}
+		offset = end
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit seed tx: %w", err)
+	}
+	return nil
+}
+
+func (s *SlotStore) ensureServerPasswords(ctx context.Context, shards []ShardDefinition) error {
+	for _, sh := range shards {
+		key := fmt.Sprintf("%s%d", serverPSKPrefix, sh.ID)
+		psk, err := s.ensureServerPassword(ctx, key)
+		if err != nil {
+			return err
+		}
+		s.serverPasswords[sh.ID] = psk
 	}
 	return nil
 }
@@ -115,11 +175,11 @@ func (s *SlotStore) AllocateSlot(ctx context.Context, userID string) (*Slot, err
 
 	slot := &Slot{}
 	row := tx.QueryRowContext(ctx, `
-SELECT port, password FROM slots
+SELECT port, password, shard_id FROM slots
 WHERE status = ?
 ORDER BY port
 LIMIT 1`, slotStatusFree)
-	if err := row.Scan(&slot.Port, &slot.Password); err != nil {
+	if err := row.Scan(&slot.ID, &slot.Password, &slot.ShardID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errNoFreePorts
 		}
@@ -138,11 +198,11 @@ WHERE port = ? AND status = ?`,
 		slotStatusUsed,
 		userValue,
 		now,
-		slot.Port,
+		slot.ID,
 		slotStatusFree,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("update slot %d: %w", slot.Port, err)
+		return nil, fmt.Errorf("update slot %d: %w", slot.ID, err)
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
@@ -155,7 +215,7 @@ WHERE port = ? AND status = ?`,
 	return slot, nil
 }
 
-func (s *SlotStore) ReserveSlot(ctx context.Context, port int) error {
+func (s *SlotStore) ReserveSlot(ctx context.Context, slotID int) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	res, err := s.db.ExecContext(ctx, `
 UPDATE slots
@@ -163,18 +223,18 @@ SET status = ?, user_id = NULL, updated_at = ?
 WHERE port = ? AND status = ?`,
 		slotStatusReserved,
 		now,
-		port,
+		slotID,
 		slotStatusUsed,
 	)
 	if err != nil {
-		return fmt.Errorf("reserve port %d: %w", port, err)
+		return fmt.Errorf("reserve slot %d: %w", slotID, err)
 	}
 	rows, _ := res.RowsAffected()
 	if rows == 1 {
 		return nil
 	}
 
-	status, err := s.slotStatus(ctx, port)
+	status, err := s.slotStatus(ctx, slotID)
 	if err != nil {
 		return err
 	}
@@ -190,9 +250,9 @@ WHERE port = ? AND status = ?`,
 	}
 }
 
-func (s *SlotStore) slotStatus(ctx context.Context, port int) (string, error) {
+func (s *SlotStore) slotStatus(ctx context.Context, slotID int) (string, error) {
 	var status string
-	err := s.db.QueryRowContext(ctx, `SELECT status FROM slots WHERE port = ?`, port).Scan(&status)
+	err := s.db.QueryRowContext(ctx, `SELECT status FROM slots WHERE port = ?`, slotID).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", errSlotNotFound
 	}
@@ -202,14 +262,14 @@ func (s *SlotStore) slotStatus(ctx context.Context, port int) (string, error) {
 	return status, nil
 }
 
-func (s *SlotStore) RotateReserved(ctx context.Context) (int, error) {
+func (s *SlotStore) RotateReserved(ctx context.Context, shardID int) (int, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return 0, fmt.Errorf("begin rotate tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.QueryContext(ctx, `SELECT port FROM slots WHERE status = ? ORDER BY port`, slotStatusReserved)
+	rows, err := tx.QueryContext(ctx, `SELECT port FROM slots WHERE status = ? AND shard_id = ? ORDER BY port`, slotStatusReserved, shardID)
 	if err != nil {
 		return 0, fmt.Errorf("select reserved slots: %w", err)
 	}
@@ -217,13 +277,13 @@ func (s *SlotStore) RotateReserved(ctx context.Context) (int, error) {
 
 	count := 0
 	for rows.Next() {
-		var port int
-		if err := rows.Scan(&port); err != nil {
-			return 0, fmt.Errorf("scan reserved port: %w", err)
+		var slotID int
+		if err := rows.Scan(&slotID); err != nil {
+			return 0, fmt.Errorf("scan reserved slot: %w", err)
 		}
 		pwd, err := generatePassword()
 		if err != nil {
-			return 0, fmt.Errorf("generate password for %d: %w", port, err)
+			return 0, fmt.Errorf("generate password for %d: %w", slotID, err)
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		if _, err := tx.ExecContext(ctx, `
@@ -233,9 +293,9 @@ WHERE port = ?`,
 			pwd,
 			slotStatusFree,
 			now,
-			port,
+			slotID,
 		); err != nil {
-			return 0, fmt.Errorf("update reserved port %d: %w", port, err)
+			return 0, fmt.Errorf("update reserved slot %d: %w", slotID, err)
 		}
 		count++
 	}
@@ -249,21 +309,22 @@ WHERE port = ?`,
 	return count, nil
 }
 
-func (s *SlotStore) AllSlots(ctx context.Context, minPort, maxPort int) ([]Slot, error) {
+func (s *SlotStore) SlotsByShard(ctx context.Context, shardID int, expected int) ([]Slot, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT port, password, status, user_id
+SELECT port, password, status, user_id, shard_id
 FROM slots
-WHERE port BETWEEN ? AND ?
-ORDER BY port`, minPort, maxPort)
+WHERE shard_id = ?
+ORDER BY port
+LIMIT ?`, shardID, expected)
 	if err != nil {
-		return nil, fmt.Errorf("select all slots: %w", err)
+		return nil, fmt.Errorf("select shard slots: %w", err)
 	}
 	defer rows.Close()
 
 	var slots []Slot
 	for rows.Next() {
 		var slot Slot
-		if err := rows.Scan(&slot.Port, &slot.Password, &slot.Status, &slot.UserID); err != nil {
+		if err := rows.Scan(&slot.ID, &slot.Password, &slot.Status, &slot.UserID, &slot.ShardID); err != nil {
 			return nil, fmt.Errorf("scan slot: %w", err)
 		}
 		slots = append(slots, slot)
@@ -271,9 +332,8 @@ ORDER BY port`, minPort, maxPort)
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate slots: %w", err)
 	}
-	expected := maxPort - minPort + 1
 	if len(slots) != expected {
-		return nil, fmt.Errorf("expected %d slots, found %d", expected, len(slots))
+		return nil, fmt.Errorf("expected %d slots for shard %d, found %d", expected, shardID, len(slots))
 	}
 	return slots, nil
 }
@@ -286,15 +346,14 @@ func generatePassword() (string, error) {
 	return base64.StdEncoding.EncodeToString(buf), nil
 }
 
-func (s *SlotStore) ensureServerPassword(ctx context.Context) (string, error) {
-	const serverKey = "server_psk"
+func (s *SlotStore) ensureServerPassword(ctx context.Context, key string) (string, error) {
 	var value string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM metadata WHERE key = ?`, serverKey).Scan(&value)
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM metadata WHERE key = ?`, key).Scan(&value)
 	if err == nil {
 		return value, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("load server password: %w", err)
+		return "", fmt.Errorf("load server password for %s: %w", key, err)
 	}
 
 	psk, err := generatePassword()
@@ -306,12 +365,12 @@ func (s *SlotStore) ensureServerPassword(ctx context.Context) (string, error) {
 INSERT INTO metadata (key, value, updated_at)
 VALUES (?, ?, ?)
 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
-		serverKey, psk, now); err != nil {
-		return "", fmt.Errorf("store server password: %w", err)
+		key, psk, now); err != nil {
+		return "", fmt.Errorf("store server password for %s: %w", key, err)
 	}
 	return psk, nil
 }
 
-func (s *SlotStore) ServerPassword() string {
-	return s.serverPassword
+func (s *SlotStore) ServerPassword(shardID int) string {
+	return s.serverPasswords[shardID]
 }

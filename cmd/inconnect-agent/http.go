@@ -57,11 +57,17 @@ func (a *Agent) handleAddUser(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	shard, ok := a.shardMap[slot.ShardID]
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "unknown_shard")
+		return
+	}
 	resp := map[string]any{
 		"status":     "ok",
-		"slotId":     slot.Port,
-		"listenPort": a.cfg.MinPort,
-		"password":   fmt.Sprintf("%s:%s", a.store.ServerPassword(), slot.Password),
+		"slotId":     slot.ID,
+		"shardId":    shard.ID,
+		"listenPort": shard.Port,
+		"password":   fmt.Sprintf("%s:%s", a.store.ServerPassword(shard.ID), slot.Password),
 		"method":     a.cfg.Method,
 		"ip":         a.cfg.PublicIP,
 	}
@@ -70,48 +76,69 @@ func (a *Agent) handleAddUser(w http.ResponseWriter, r *http.Request) {
 
 func (a *Agent) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Port int `json:"port"`
+		SlotID  int   `json:"slotId"`
+		SlotIDs []int `json:"slotIds"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json")
 		return
 	}
-	if req.Port == 0 {
-		writeError(w, http.StatusBadRequest, "port_required")
+	var targets []int
+	if len(req.SlotIDs) > 0 {
+		targets = req.SlotIDs
+	} else if req.SlotID != 0 {
+		targets = []int{req.SlotID}
+	}
+	if len(targets) == 0 {
+		writeError(w, http.StatusBadRequest, "slot_required")
 		return
 	}
-	err := a.store.ReserveSlot(r.Context(), req.Port)
-	if err != nil {
-		switch {
-		case errors.Is(err, errSlotNotFound):
-			writeError(w, http.StatusNotFound, "slot_not_found")
-		case errors.Is(err, errSlotReserved):
-			writeError(w, http.StatusBadRequest, "already_reserved")
-		case errors.Is(err, errSlotFree):
-			writeError(w, http.StatusBadRequest, "slot_not_in_use")
-		case errors.Is(err, errSlotNotInUse):
-			writeError(w, http.StatusBadRequest, "slot_not_in_use")
-		default:
-			writeError(w, http.StatusInternalServerError, "internal_error")
+	for _, id := range targets {
+		err := a.store.ReserveSlot(r.Context(), id)
+		if err != nil {
+			switch {
+			case errors.Is(err, errSlotNotFound):
+				writeError(w, http.StatusNotFound, "slot_not_found")
+			case errors.Is(err, errSlotReserved):
+				writeError(w, http.StatusBadRequest, "already_reserved")
+			case errors.Is(err, errSlotFree):
+				writeError(w, http.StatusBadRequest, "slot_not_in_use")
+			case errors.Is(err, errSlotNotInUse):
+				writeError(w, http.StatusBadRequest, "slot_not_in_use")
+			default:
+				writeError(w, http.StatusInternalServerError, "internal_error")
+			}
+			return
 		}
-		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (a *Agent) handleReload(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ShardID int `json:"shardId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":  "accepted",
 		"message": "reload started",
 	})
 
+	var target []int
+	if req.ShardID > 0 {
+		target = []int{req.ShardID}
+	}
+
 	go func() {
-		processed, err := a.Reload(context.Background(), true)
+		processed, err := a.Reload(context.Background(), true, target)
 		if err != nil {
 			log.Printf("async reload failed: %v", err)
 			return
 		}
-		log.Printf("async reload finished, reserved processed=%d", processed)
+		log.Printf("async reload finished: %+v", processed)
 	}()
 }
 

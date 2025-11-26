@@ -41,6 +41,12 @@ DOCKER_BINARY="${DOCKER_BINARY:-/usr/bin/docker}"
 CONTAINER_NAME="${CONTAINER_NAME:-xray-ss2022}"
 API_PORT="${API_PORT:-10085}"
 METHOD="${METHOD:-2022-blake3-aes-128-gcm}"
+SHARD_COUNT="${SHARD_COUNT:-1}"
+SHARD_SIZE="${SHARD_SIZE:-0}"
+SHARD_PORT_STEP="${SHARD_PORT_STEP:-1}"
+SHARD_PREFIX="${SHARD_PREFIX:-xray-ss2022}"
+SHARDS="${SHARDS:-}"
+RELOAD_INTERVAL="${RELOAD_INTERVAL:-0}"
 
 apt_install() {
   log "Installing OS dependencies..."
@@ -121,8 +127,16 @@ INCONNECT_FLAGS="-listen=${LISTEN_ADDR} \
 -docker-binary=${DOCKER_BINARY} \
 -container-name=${CONTAINER_NAME} \
 -api-port=${API_PORT} \
--method=${METHOD}"
+-method=${METHOD} \
+-shard-count=${SHARD_COUNT} \
+-shard-size=${SHARD_SIZE} \
+-shard-port-step=${SHARD_PORT_STEP} \
+-shard-prefix=${SHARD_PREFIX} \
+-reload-interval=${RELOAD_INTERVAL}"
 EOF
+  if [[ -n "$SHARDS" ]]; then
+    echo 'INCONNECT_FLAGS="$INCONNECT_FLAGS -shards='"${SHARDS}"'"' >>"$SERVICE_ENV"
+  fi
   chmod 0644 "$SERVICE_ENV"
 }
 

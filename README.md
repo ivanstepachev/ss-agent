@@ -20,14 +20,24 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | --- | --- | --- |
 | `-listen` | HTTP API (`/adduser`, `/deleteuser`, `/reload`) | `127.0.0.1:8080` |
 | `-db-path` | SQLite база | `/var/lib/inconnect-agent/ports.db` |
-| `-min-port`, `-max-port` | Порт прослушки и количество слотов (см. ниже) | `50001–50250` |
+| `-min-port`, `-max-port` | Порт базы и общее число слотов (если не задан `-shards`) | `50001–50250` |
+| `-shard-count` / `-shard-size` | Кол-во шардов и слотов в каждом (по умолчанию всё в одном) | `1` / `portCount` |
+| `-shard-port-step` | Разница между портами шардов | `1` |
+| `-shards` | Явное описание `port:slots,...` (перекрывает предыдущие) | пусто |
+| `-shard-prefix` | Префикс для имён контейнеров | `xray-ss2022` |
+| `-reload-interval` | Авто-релоад раз в N секунд (0 = выкл) | `0` |
 | `-public-ip` | IP, отдаваемый в `/adduser` | пусто |
 | `-auth-token` | Требуемый заголовок `X-Auth-Token` | пусто (без авторизации) |
 | `-docker-image` | Образ Xray | `teddysun/xray:latest` |
-| `-container-name` | Имя Docker-контейнера | `xray-ss2022` |
-| `-config-dir` | Каталог с `config.json` | `/etc/xray` |
+| `-config-dir` | Каталог с конфигами | `/etc/xray` |
 
 Полный список см. `cmd/inconnect-agent/config.go`.
+
+### Шардинг
+- По умолчанию агент работает в одном контейнере: все слоты добавляются в `clients` на `min-port`.
+- Для продакшена можно разбить базу на шарды (например, `SHARD_COUNT=8`, `SHARD_SIZE=500`), чтобы каждый контейнер обслуживал 500 клиентов на своём порту (`50010`, `50020`, ...).
+- Порты вычисляются как `min-port + (shard-1)*shard-port-step`, но при необходимости можно задать явный список `-shards=50010:500,50050:1000,...`.
+- Каждому шару выдаётся собственный `server_psk` и Docker-контейнер `shard-prefix-<id>`, поэтому reload и падения одного контейнера не влияют на остальные.
 
 ## Запуск
 1. Создать каталоги:
@@ -43,10 +53,9 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
      -auth-token=SECRET_TOKEN
    ```
 4. На старте агент:
-   - инициализирует БД и 250 слотов;
-   - формирует общий inbound на **одном порту** (`min-port`) и добавляет все слоты как `clients`;
-   - проверяет конфиг `xray -test`, заменяет `/etc/xray/config.json`;
-   - запускает `xray-ss2022` (порты: `min-port` и `api-port`).
+   - инициализирует БД и создаёт слоты по каждому шару (по умолчанию 1×`max-port - min-port + 1`);
+   - для каждого шарда формирует отдельный конфиг (`/etc/xray/config-shard-<n>.json`) с inbound на своём порту и собственным server PSK;
+   - проверяет конфиги `xray -test`, активирует их и создаёт/перезапускает контейнеры `shard-prefix-<n>` с маппингом только нужных портов.
 
 ### Пример systemd unit (упрощённый)
 ```
@@ -83,18 +92,27 @@ WantedBy=multi-user.target
   ```bash
   curl -XPOST -H "Content-Type: application/json" \
        -H "X-Auth-Token: SECRET" \
-       -d '{"port":50037}' http://127.0.0.1:8080/deleteuser
+       -d '{"slotId":50037}' http://127.0.0.1:8080/deleteuser
   ```
-  Помечает слот как `reserved`.
+  Помечает слот как `reserved`. Можно передать несколько ID сразу:
+  ```json
+  { "slotIds": [50037, 50038, 50040] }
+  ```
 
 - `/reload`
   ```bash
   curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/reload
   ```
-  Возвращает `202 Accepted` сразу и запускает reload асинхронно. Агент:
-    - меняет пароли у `reserved` → `free`;
-    - заново собирает конфиг (все слоты как `clients`);
-    - валидирует его и шлёт `SIGUSR1` в контейнер (быстрый reload без разрыва). При ошибке падает обратно на `docker restart`.
+  Возвращает `202 Accepted` и запускает reload асинхронно. Можно указать конкретный шард:
+  ```bash
+  curl -XPOST -H "X-Auth-Token: SECRET" \
+       -d '{"shardId":2}' \
+       http://127.0.0.1:8080/reload
+  ```
+  Процесс:
+    - пароли у `reserved` → `free`;
+    - пересборка конфига выбранного шарда;
+    - `xray -test` + обновление файла + `SIGUSR1` контейнеру (fallback на `docker restart` при ошибке).
 
 `/healthz` — GET, возвращает `{"status":"ok"}`; нужен для проверок живости.
 
@@ -111,9 +129,20 @@ WantedBy=multi-user.target
 sudo REPO_URL=https://github.com/your-org/inconnect-agent.git \
      PUBLIC_IP=203.0.113.10 \
      AUTH_TOKEN=SECRET_TOKEN \
+     SHARD_COUNT=8 \
+     SHARD_SIZE=500 \
+     MIN_PORT=50010 \
+     SHARD_PORT_STEP=10 \
+     RELOAD_INTERVAL=600 \
      ./scripts/install.sh
 ```
-Доступные переменные: `BRANCH`, `INSTALL_DIR`, `MIN_PORT`, `MAX_PORT`, `DOCKER_IMAGE`, `LISTEN_ADDR`, `DB_PATH`, `CONFIG_DIR`, и т.д. — см. начало скрипта.
+Дополнительные переменные:
+- `SHARD_COUNT`, `SHARD_SIZE` — количество контейнеров и слотов в каждом (по умолчанию всё в одном).
+- `SHARD_PORT_STEP` — шаг между портами шардов (пример выше: 50010, 50020, ...).
+- `SHARDS` — явный список `port:slots,...`, если нужно задать разные размеры.
+- `SHARD_PREFIX` — как именовать контейнеры (по умолчанию `xray-ss2022` → `xray-ss2022-1`, `-2`, ...).
+- `RELOAD_INTERVAL` — как часто автоматически запускать `/reload` (в секундах, 0 = отключено).
+Полный список см. в начале скрипта (можно задавать и `BRANCH`, `INSTALL_DIR`, `DB_PATH`, `CONFIG_DIR`, и т.д.).
 
 ### Быстрое тестирование без удалённого репозитория
 Если код находится уже на сервере, можно пропустить `git clone`, указав `LOCAL_SOURCE_DIR` (скрипт просто скопирует текущую директорию):
@@ -138,11 +167,12 @@ sudo LOCAL_SOURCE_DIR=$PWD \
         -d '{"user_id":"test"}' \
         http://127.0.0.1:8080/adduser
    ```
+   Запомните `slotId`, `shardId` и `listenPort` из ответа — пароль уже в формате `<server_psk>:<client_psk>`.
 3. Пометить и перезагрузить:
    ```bash
    curl -XPOST -H "Content-Type: application/json" \
         -H "X-Auth-Token: SECRET" \
-        -d '{"port":<slot_from_adduser>}' http://127.0.0.1:8080/deleteuser
+        -d '{"slotId":<slot_from_adduser>}' http://127.0.0.1:8080/deleteuser
    curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/reload
    journalctl -u inconnect-agent -n 20
    ```
@@ -151,6 +181,6 @@ sudo LOCAL_SOURCE_DIR=$PWD \
 ## Примечания
 - В БД автоматически создаётся таблица `metadata` с серверным паролем (`server_psk`) для единого inbound-а. При первом запуске значение генерируется и сохраняется.
 - `min-port` определяет фактический порт прослушки Shadowsocks. `max-port` задаёт количество слотов (например, `50001–50250` = 250 слотов).
-- Все слоты (даже `free`) присутствуют в конфиге как `clients`, поэтому `/adduser` не требует reload.
-- Для клиентов SS2022 пароль уже формируется в ответе как `<server_psk>:<client_psk>`; дополнительные вычисления не нужны.
+- Все слоты (даже `free`) присутствуют в конфиге как `clients`, поэтому `/adduser` не требует reload. Ответ содержит `slotId`, `shardId`, `listenPort` и готовый пароль `<server_psk>:<client_psk>`.
+- При нескольких шардах reload выполняется по очереди для каждого контейнера. Можно запускать часто (например, каждые 5–10 минут) или задать `-reload-interval`, чтобы агент делал это автоматически.
 - `/reload` асинхронный: HTTP-ответ приходит сразу, а прогресс виден в `journalctl -u inconnect-agent`.
