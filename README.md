@@ -20,7 +20,7 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | --- | --- | --- |
 | `-listen` | HTTP API (`/adduser`, `/deleteuser`, `/reload`) | `127.0.0.1:8080` |
 | `-db-path` | SQLite база | `/var/lib/inconnect-agent/ports.db` |
-| `-min-port`, `-max-port` | Диапазон SS2022 портов | `50001–50250` |
+| `-min-port`, `-max-port` | Порт прослушки и количество слотов (см. ниже) | `50001–50250` |
 | `-public-ip` | IP, отдаваемый в `/adduser` | пусто |
 | `-auth-token` | Требуемый заголовок `X-Auth-Token` | пусто (без авторизации) |
 | `-docker-image` | Образ Xray | `teddysun/xray:latest` |
@@ -43,11 +43,10 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
      -auth-token=SECRET_TOKEN
    ```
 4. На старте агент:
-   - инициализирует БД и 250 слотов,
-   - собирает `config.generated.json`,
-   - проверяет его `docker run ... xray -test`,
-   - заменяет `/etc/xray/config.json`,
-   - создаёт/перезапускает контейнер `xray-ss2022`.
+   - инициализирует БД и 250 слотов;
+   - формирует общий inbound на **одном порту** (`min-port`) и добавляет все слоты как `clients`;
+   - проверяет конфиг `xray -test`, заменяет `/etc/xray/config.json`;
+   - запускает `xray-ss2022` (порты: `min-port` и `api-port`).
 
 ### Пример systemd unit (упрощённый)
 ```
@@ -74,7 +73,10 @@ WantedBy=multi-user.target
        -H "X-Auth-Token: SECRET" \
        -d '{"user_id":"123"}' http://127.0.0.1:8080/adduser
   ```
-  Ответ содержит `port`, `password`, `method`, `ip`.
+  Ответ содержит:
+  - `listenPort` — фактический порт Shadowsocks (общий для всех клиентов);
+  - `port` — идентификатор слота (его же нужно передавать в `/deleteuser`);
+  - `password`, `method`, `ip`.
 
 - `/deleteuser`
   ```bash
@@ -88,7 +90,10 @@ WantedBy=multi-user.target
   ```bash
   curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/reload
   ```
-  Перегенерирует пароли для всех `reserved`, пересобирает конфиг, валидирует его и рестартует контейнер.
+  Возвращает `202 Accepted` сразу и запускает reload асинхронно. Агент:
+    - меняет пароли у `reserved` → `free`;
+    - заново собирает конфиг (все слоты как `clients`);
+    - валидирует его и шлёт `SIGUSR1` в контейнер (быстрый reload без разрыва). При ошибке падает обратно на `docker restart`.
 
 `/healthz` — GET, возвращает `{"status":"ok"}`; нужен для проверок живости.
 
@@ -119,7 +124,31 @@ sudo LOCAL_SOURCE_DIR=$PWD \
 ```
 Это удобно для проверки свежих сборок до того, как они попадут в GitHub.
 
+## Проверка после установки/обновления
+1. Убедиться, что службы запущены:
+   ```bash
+   systemctl status inconnect-agent
+   docker ps | grep xray-ss2022
+   ```
+2. Получить тестовый слот:
+   ```bash
+   curl -XPOST -H "Content-Type: application/json" \
+        -H "X-Auth-Token: SECRET" \
+        -d '{"user_id":"test"}' \
+        http://127.0.0.1:8080/adduser
+   ```
+3. Пометить и перезагрузить:
+   ```bash
+   curl -XPOST -H "Content-Type: application/json" \
+        -H "X-Auth-Token: SECRET" \
+        -d '{"port":<slot_from_adduser>}' http://127.0.0.1:8080/deleteuser
+   curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/reload
+   journalctl -u inconnect-agent -n 20
+   ```
+   В журналах появятся строки `async reload finished` и `reserved processed=N`.
+
 ## Примечания
-- `ports.db` использует WAL и блокировки SQLite (`_busy_timeout=5000`), поэтому агент рассчитан на единственный экземпляр.
-- Порты, находящиеся в статусе `used`, всегда присутствуют в конфиге с тем же паролем; `/adduser` не требует перезагрузки.
-- Если в `/reload` не было `reserved`, контейнер всё равно перезапускается (поведение можно доработать при необходимости).
+- В БД автоматически создаётся таблица `metadata` с серверным паролем (`server_psk`) для единого inbound-а. При первом запуске значение генерируется и сохраняется.
+- `min-port` определяет фактический порт прослушки Shadowsocks. `max-port` задаёт количество слотов (например, `50001–50250` = 250 слотов).
+- Все слоты (даже `free`) присутствуют в конфиге как `clients`, поэтому `/adduser` не требует reload.
+- `/reload` асинхронный: HTTP-ответ приходит сразу, а прогресс виден в `journalctl -u inconnect-agent`.

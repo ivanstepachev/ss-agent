@@ -14,6 +14,7 @@ const (
 	slotStatusFree     = "free"
 	slotStatusUsed     = "used"
 	slotStatusReserved = "reserved"
+	serverPasswordKey  = "server_psk"
 )
 
 var (
@@ -31,6 +32,12 @@ CREATE TABLE IF NOT EXISTS slots (
     created_at      DATETIME NOT NULL,
     updated_at      DATETIME NOT NULL
 );`
+	metadataSchema = `
+CREATE TABLE IF NOT EXISTS metadata (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  DATETIME NOT NULL
+);`
 )
 
 // Slot represents a single port allocation entry.
@@ -42,7 +49,8 @@ type Slot struct {
 }
 
 type SlotStore struct {
-	db *sql.DB
+	db             *sql.DB
+	serverPassword string
 }
 
 func NewSlotStore(db *sql.DB) *SlotStore {
@@ -53,6 +61,14 @@ func (s *SlotStore) Init(ctx context.Context, cfg Config) error {
 	if _, err := s.db.ExecContext(ctx, schemaStatement); err != nil {
 		return fmt.Errorf("create schema: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, metadataSchema); err != nil {
+		return fmt.Errorf("create metadata schema: %w", err)
+	}
+	psk, err := s.ensureServerPassword(ctx)
+	if err != nil {
+		return err
+	}
+	s.serverPassword = psk
 	return s.ensureSlots(ctx, cfg.MinPort, cfg.MaxPort)
 }
 
@@ -268,4 +284,34 @@ func generatePassword() (string, error) {
 		return "", fmt.Errorf("read random bytes: %w", err)
 	}
 	return base64.StdEncoding.EncodeToString(buf), nil
+}
+
+func (s *SlotStore) ensureServerPassword(ctx context.Context) (string, error) {
+	const serverKey = "server_psk"
+	var value string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM metadata WHERE key = ?`, serverKey).Scan(&value)
+	if err == nil {
+		return value, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("load server password: %w", err)
+	}
+
+	psk, err := generatePassword()
+	if err != nil {
+		return "", fmt.Errorf("generate server password: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO metadata (key, value, updated_at)
+VALUES (?, ?, ?)
+ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+		serverKey, psk, now); err != nil {
+		return "", fmt.Errorf("store server password: %w", err)
+	}
+	return psk, nil
+}
+
+func (s *SlotStore) ServerPassword() string {
+	return s.serverPassword
 }

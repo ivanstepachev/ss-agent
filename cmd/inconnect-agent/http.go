@@ -57,11 +57,12 @@ func (a *Agent) handleAddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{
-		"status":   "ok",
-		"port":     slot.Port,
-		"password": slot.Password,
-		"method":   a.cfg.Method,
-		"ip":       a.cfg.PublicIP,
+		"status":     "ok",
+		"port":       slot.Port,
+		"listenPort": a.cfg.MinPort,
+		"password":   slot.Password,
+		"method":     a.cfg.Method,
+		"ip":         a.cfg.PublicIP,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

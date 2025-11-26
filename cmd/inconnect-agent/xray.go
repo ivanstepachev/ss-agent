@@ -58,7 +58,7 @@ func (a *Agent) generateAndSwapConfig(ctx context.Context) error {
 		return err
 	}
 
-	payload, err := buildXrayConfig(slots, a.cfg)
+	payload, err := buildXrayConfig(slots, a.cfg, a.store.ServerPassword())
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
 	}
@@ -136,30 +136,46 @@ type outbound struct {
 	Tag      string `json:"tag,omitempty"`
 }
 
-func buildXrayConfig(slots []Slot, cfg Config) ([]byte, error) {
-	inbounds := make([]inbound, 0, len(slots)+1)
+type ssClient struct {
+	Password string `json:"password"`
+	Email    string `json:"email,omitempty"`
+}
+
+func buildXrayConfig(slots []Slot, cfg Config, serverPassword string) ([]byte, error) {
+	clients := make([]ssClient, 0, len(slots))
 	for _, slot := range slots {
-		settings := map[string]any{
-			"method":   cfg.Method,
-			"password": slot.Password,
-			"network":  "tcp,udp",
+		email := fmt.Sprintf("slot-%d", slot.Port)
+		if slot.UserID.Valid && slot.UserID.String != "" {
+			email = slot.UserID.String
 		}
-		inbounds = append(inbounds, inbound{
-			Listen:   "0.0.0.0",
-			Port:     slot.Port,
-			Protocol: "shadowsocks",
-			Settings: settings,
+		clients = append(clients, ssClient{
+			Password: slot.Password,
+			Email:    email,
 		})
 	}
-	inbounds = append(inbounds, inbound{
-		Listen:   "0.0.0.0",
-		Port:     cfg.APIPort,
-		Protocol: "dokodemo-door",
-		Settings: map[string]any{
-			"address": "0.0.0.0",
+
+	inbounds := []inbound{
+		{
+			Listen:   "0.0.0.0",
+			Port:     cfg.MinPort,
+			Protocol: "shadowsocks",
+			Settings: map[string]any{
+				"method":   cfg.Method,
+				"password": serverPassword,
+				"network":  "tcp,udp",
+				"clients":  clients,
+			},
 		},
-		Tag: "api",
-	})
+		{
+			Listen:   "0.0.0.0",
+			Port:     cfg.APIPort,
+			Protocol: "dokodemo-door",
+			Settings: map[string]any{
+				"address": "0.0.0.0",
+			},
+			Tag: "api",
+		},
+	}
 
 	cfgPayload := xrayConfig{
 		API: apiConfig{
@@ -277,15 +293,14 @@ func (d *DockerManager) sendSignal(ctx context.Context, signal string) error {
 }
 
 func (d *DockerManager) createContainer(ctx context.Context, cfg Config) error {
-	portRange := fmt.Sprintf("%d-%d:%d-%d", cfg.MinPort, cfg.MaxPort, cfg.MinPort, cfg.MaxPort)
 	args := []string{
 		"run",
 		"-d",
 		"--name", d.ContainerName,
 		"--restart=always",
 		"-v", fmt.Sprintf("%s:/etc/xray", cfg.ConfigDir),
-		"-p", portRange + "/tcp",
-		"-p", portRange + "/udp",
+		"-p", fmt.Sprintf("%d:%d/tcp", cfg.MinPort, cfg.MinPort),
+		"-p", fmt.Sprintf("%d:%d/udp", cfg.MinPort, cfg.MinPort),
 		"-p", fmt.Sprintf("%d:%d/tcp", cfg.APIPort, cfg.APIPort),
 		d.Image,
 		"xray",
