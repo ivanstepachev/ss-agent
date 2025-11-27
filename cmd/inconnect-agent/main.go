@@ -43,6 +43,15 @@ func main() {
 		log.Printf("configuration loaded from %s", configPath)
 	}
 
+	if cfg.PublicIP == "" {
+		if ip, err := detectOutboundIP(); err == nil {
+			cfg.PublicIP = ip
+			log.Printf("public IP auto-detected: %s", ip)
+		} else {
+			log.Printf("failed to auto-detect public IP: %v", err)
+		}
+	}
+
 	if err := cfg.validate(); err != nil {
 		log.Fatalf("invalid configuration: %v", err)
 	}

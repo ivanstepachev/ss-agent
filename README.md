@@ -41,6 +41,7 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 1. Агент берёт значения по умолчанию.
 2. Если найден конфиг (`-config`, `INCONNECT_CONFIG` или `/etc/inconnect-agent/config.yaml`), он загружается и дополняет/переопределяет дефолты.
 3. Флаги командной строки имеют наивысший приоритет (перебивают файл).
+4. Если `publicIP` не указан, агент автоматически определяет IP активного интерфейса.
 
 Пример `config.yaml`:
 ```yaml
@@ -184,49 +185,50 @@ WantedBy=multi-user.target
 `/healthz` — GET, возвращает `{"status":"ok"}`; нужен для проверок живости.
 
 ## Автоматическая установка
-Скрипт `scripts/install.sh` сворачивает все шаги в один запуск:
-- ставит зависимости (`git`, `golang-go`, `docker.io`, `curl`);
-- создаёт пользователя/группу `inconnect`;
-- клонирует репозиторий, собирает бинарь и кладёт его в `/usr/local/bin`;
-- готовит каталоги `/var/lib/inconnect-agent` и `/etc/xray`;
-- генерирует `/etc/inconnect-agent/config.yaml` из переданных переменных, записывает unit-файл systemd с `-config` и запускает службу.
+`scripts/install.sh` теперь предполагает, что нужные артефакты уже рядом:
 
-Перед запуском обязательно задайте `REPO_URL` (и при необходимости другие параметры) через переменные окружения:
+- Linux-бинарь `inconnect-agent`;
+- шаблон `config.yaml` (можно с переменными вида `${PUBLIC_IP}` / `${AUTH_TOKEN}`);
+- сам `scripts/install.sh`.
+
+При запуске скрипт:
+1. Устанавливает зависимости (`docker.io`, `curl`, `gettext-base`), создаёт пользователя `inconnect`, каталоги `/var/lib/inconnect-agent` и `/etc/xray`.
+2. Копирует бинарь в `/usr/local/bin/inconnect-agent`.
+3. Подставляет переменные в шаблон (`envsubst`), автоматически определяет IP сервера (если `PUBLIC_IP` не задан), рендерит `/etc/inconnect-agent/config.yaml`.
+4. Создаёт unit-файл systemd с `-config=/etc/inconnect-agent/config.yaml`, включает и запускает службу.
+
+### Использование
 ```bash
-sudo REPO_URL=https://github.com/your-org/inconnect-agent.git \
-     PUBLIC_IP=203.0.113.10 \
-     AUTH_TOKEN=SECRET_TOKEN \
-     SHARD_COUNT=8 \
-     SHARD_SIZE=500 \
-     MIN_PORT=50010 \
-     SHARD_PORT_STEP=10 \
-     RESTART_INTERVAL=600 \
-     RESTART_WHEN_RESERVED=50 \
-     RESTART_AT="02:00,14:00" \
-     ALLOCATION_STRATEGY=roundrobin \
+# В каталоге лежат: inconnect-agent, config.yaml, scripts/install.sh
+sudo AUTH_TOKEN=SECRET_TOKEN \
      ./scripts/install.sh
 ```
-Дополнительные переменные:
-- `SHARD_COUNT`, `SHARD_SIZE` — количество контейнеров и слотов в каждом (по умолчанию всё в одном).
-- `SHARD_PORT_STEP` — шаг между портами шардов (пример выше: 50010, 50020, ...).
-- `SHARDS` — явный список `port:slots,...`, если нужно задать разные размеры.
-- `SHARD_PREFIX` — как именовать контейнеры (по умолчанию `xray-ss2022` → `xray-ss2022-1`, `-2`, ...).
-- `RESTART_INTERVAL` — как часто автоматически запускать `/restart` (в секундах, 0 = отключено).
-- `RESTART_WHEN_RESERVED` — рестартует только те шарды, где накопилось ≥ N слотов со статусом `reserved`.
-- `RESTART_AT` — список UTC-времён (`HH:MM,HH:MM`), когда выполнять каскадный рестарт всех шардов (1–2 окна в сутки).
-- `ALLOCATION_STRATEGY` — стратегия выдачи слотов: `sequential`, `roundrobin`, `leastfree`.
-- `CONFIG_FILE` — путь, куда положить `config.yaml` (по умолчанию `/etc/inconnect-agent/config.yaml`).
-Полный список см. в начале скрипта (можно задавать и `BRANCH`, `INSTALL_DIR`, `DB_PATH`, `CONFIG_DIR`, и т.д.).
 
-### Быстрое тестирование без удалённого репозитория
-Если код находится уже на сервере, можно пропустить `git clone`, указав `LOCAL_SOURCE_DIR` (скрипт просто скопирует текущую директорию):
-```bash
-sudo LOCAL_SOURCE_DIR=$PWD \
-     PUBLIC_IP=203.0.113.10 \
-     AUTH_TOKEN=SECRET \
-     ./scripts/install.sh
+Доступные переменные окружения (необязательно):
+- `BIN_SOURCE` — путь к бинарю (по умолчанию `./inconnect-agent`).
+- `CONFIG_SOURCE` — путь к шаблону config.yaml (по умолчанию `./config.yaml`).
+- `CONFIG_FILE` — куда положить финальный конфиг (`/etc/inconnect-agent/config.yaml`).
+- `PUBLIC_IP` — можно задать вручную, иначе скрипт определит IP через `ip route`/`curl`.
+- `AUTH_TOKEN`, `LISTEN_ADDR` и любые другие — если они встречаются в шаблоне, `envsubst` подставит значения.
+
+Сам шаблон может выглядеть так:
+```yaml
+listen: ${LISTEN_ADDR:-127.0.0.1:8080}
+dbPath: /var/lib/inconnect-agent/ports.db
+configDir: /etc/xray
+publicIP: ${PUBLIC_IP}
+authToken: ${AUTH_TOKEN}
+shardCount: 8
+shardSize: 500
+shardPortStep: 10
+shardPrefix: xray-ss2022
+restartWhenReserved: 50
+restartAt:
+  - "02:00"
+  - "14:00"
+allocationStrategy: roundrobin
 ```
-Это удобно для проверки свежих сборок до того, как они попадут в GitHub.
+Файлы в исходной папке **не удаляются** — скрипт лишь копирует их в рабочие локации. Для обновления агента достаточно заменить бинарь/шаблон и снова вызвать `sudo ./scripts/install.sh` (или вручную скопировать новые файлы и сделать `systemctl restart inconnect-agent`).
 
 ## Проверка после установки/обновления
 1. Убедиться, что службы запущены:

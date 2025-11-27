@@ -20,10 +20,6 @@ require_root() {
 require_root
 
 # Tunable parameters (override via environment variables before running the script)
-# Repository URL must be overridden to point at the actual Git remote.
-REPO_URL="${REPO_URL:-https://example.com/inconnect-agent.git}"
-BRANCH="${BRANCH:-main}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/inconnect-agent}"
 BIN_PATH="${BIN_PATH:-/usr/local/bin/inconnect-agent}"
 SERVICE_NAME="${SERVICE_NAME:-inconnect-agent}"
 SERVICE_USER="${SERVICE_USER:-inconnect}"
@@ -31,32 +27,20 @@ SERVICE_GROUP="${SERVICE_GROUP:-inconnect}"
 SERVICE_ENV="${SERVICE_ENV:-/etc/default/inconnect-agent}"
 DB_PATH="${DB_PATH:-/var/lib/inconnect-agent/ports.db}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/xray}"
-LISTEN_ADDR="${LISTEN_ADDR:-127.0.0.1:8080}"
-PUBLIC_IP="${PUBLIC_IP:-}"
-AUTH_TOKEN="${AUTH_TOKEN:-}"
-MIN_PORT="${MIN_PORT:-50001}"
-MAX_PORT="${MAX_PORT:-50250}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-teddysun/xray:latest}"
 DOCKER_BINARY="${DOCKER_BINARY:-/usr/bin/docker}"
-CONTAINER_NAME="${CONTAINER_NAME:-xray-ss2022}"
-API_PORT="${API_PORT:-10085}"
-METHOD="${METHOD:-2022-blake3-aes-128-gcm}"
-SHARD_COUNT="${SHARD_COUNT:-1}"
-SHARD_SIZE="${SHARD_SIZE:-0}"
-SHARD_PORT_STEP="${SHARD_PORT_STEP:-1}"
-SHARD_PREFIX="${SHARD_PREFIX:-xray-ss2022}"
-SHARDS="${SHARDS:-}"
-RESTART_INTERVAL="${RESTART_INTERVAL:-0}"
-RESTART_WHEN_RESERVED="${RESTART_WHEN_RESERVED:-0}"
-RESTART_AT="${RESTART_AT:-}"
-ALLOCATION_STRATEGY="${ALLOCATION_STRATEGY:-roundrobin}"
+BIN_SOURCE="${BIN_SOURCE:-./inconnect-agent}"
+CONFIG_SOURCE="${CONFIG_SOURCE:-./config.yaml}"
 CONFIG_FILE="${CONFIG_FILE:-/etc/inconnect-agent/config.yaml}"
+AUTH_TOKEN="${AUTH_TOKEN:-}"
+PUBLIC_IP="${PUBLIC_IP:-}"
+LISTEN_ADDR="${LISTEN_ADDR:-}"
 
 apt_install() {
   log "Installing OS dependencies..."
   apt-get update -y
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    git golang-go docker.io curl rsync
+    docker.io curl gettext-base
 }
 
 setup_user() {
@@ -72,88 +56,44 @@ setup_user() {
   usermod -aG docker "$SERVICE_USER" || true
 }
 
-LOCAL_SOURCE_DIR="${LOCAL_SOURCE_DIR:-}"
-
-fetch_repo() {
-  if [[ -n "$LOCAL_SOURCE_DIR" ]]; then
-    if [[ ! -d "$LOCAL_SOURCE_DIR" ]]; then
-      echo "LOCAL_SOURCE_DIR '$LOCAL_SOURCE_DIR' does not exist" >&2
-      exit 1
-    fi
-    log "Copying source from ${LOCAL_SOURCE_DIR}..."
-    rm -rf "$INSTALL_DIR"
-    install -d -m 0755 "$INSTALL_DIR"
-    rsync -a --exclude '.git' "${LOCAL_SOURCE_DIR}/" "${INSTALL_DIR}/"
-    return
-  fi
-  if [[ -d "$INSTALL_DIR/.git" ]]; then
-    log "Updating repository in $INSTALL_DIR..."
-    git -C "$INSTALL_DIR" fetch origin
-    git -C "$INSTALL_DIR" checkout "$BRANCH"
-    git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH"
-  else
-    if [[ "$REPO_URL" == "https://example.com/inconnect-agent.git" ]]; then
-      echo "ERROR: REPO_URL is still the placeholder. Set REPO_URL or LOCAL_SOURCE_DIR." >&2
-      exit 1
-    fi
-    log "Cloning repository..."
-    rm -rf "$INSTALL_DIR"
-    install -d -m 0755 "$(dirname "$INSTALL_DIR")"
-    git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
-  fi
-}
-
-build_binary() {
-  log "Building agent binary..."
-  (cd "$INSTALL_DIR" && go build -o "$BIN_PATH" ./cmd/inconnect-agent)
-  chown "$SERVICE_USER":"$SERVICE_GROUP" "$BIN_PATH"
-  chmod 0755 "$BIN_PATH"
-}
-
 prepare_dirs() {
   log "Preparing directories..."
   install -d -m 0755 "$(dirname "$DB_PATH")" "$CONFIG_DIR"
   chown -R "$SERVICE_USER":"$SERVICE_GROUP" "$(dirname "$DB_PATH")" "$CONFIG_DIR"
 }
 
-write_config_file() {
-  log "Writing config file $CONFIG_FILE..."
-  install -d -m 0755 "$(dirname "$CONFIG_FILE")"
-  {
-    echo "listen: ${LISTEN_ADDR}"
-    echo "dbPath: ${DB_PATH}"
-    echo "configDir: ${CONFIG_DIR}"
-    echo "publicIP: \"${PUBLIC_IP}\""
-    echo "authToken: \"${AUTH_TOKEN}\""
-    echo "minPort: ${MIN_PORT}"
-    echo "maxPort: ${MAX_PORT}"
-    echo "dockerImage: ${DOCKER_IMAGE}"
-    echo "dockerBinary: ${DOCKER_BINARY}"
-    echo "containerName: ${CONTAINER_NAME}"
-    echo "apiPort: ${API_PORT}"
-    echo "method: ${METHOD}"
-    echo "shardCount: ${SHARD_COUNT}"
-    echo "shardSize: ${SHARD_SIZE}"
-    echo "shardPortStep: ${SHARD_PORT_STEP}"
-    echo "shards: \"${SHARDS}\""
-    echo "shardPrefix: ${SHARD_PREFIX}"
-    echo "restartInterval: ${RESTART_INTERVAL}"
-    echo "restartWhenReserved: ${RESTART_WHEN_RESERVED}"
-    echo "allocationStrategy: ${ALLOCATION_STRATEGY}"
-  } >"$CONFIG_FILE"
-  if [[ -n "$RESTART_AT" ]]; then
-    {
-      echo "restartAt:"
-      IFS=',' read -ra _times <<<"$RESTART_AT"
-      for t in "${_times[@]}"; do
-        t_trimmed="$(echo "$t" | xargs)"
-        [[ -z "$t_trimmed" ]] && continue
-        echo "  - \"$t_trimmed\""
-      done
-    } >>"$CONFIG_FILE"
-  else
-    echo "restartAt: []" >>"$CONFIG_FILE"
+detect_public_ip() {
+  if [[ -n "$PUBLIC_IP" ]]; then
+    return
   fi
+  if PUBLIC_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}'); then
+    if [[ -n "$PUBLIC_IP" ]]; then
+      return
+    fi
+  fi
+  PUBLIC_IP=$(curl -fsSL https://api.ipify.org || true)
+}
+
+install_binary() {
+  if [[ ! -f "$BIN_SOURCE" ]]; then
+    echo "Binary not found at $BIN_SOURCE" >&2
+    exit 1
+  fi
+  log "Installing binary to $BIN_PATH..."
+  install -m 0755 "$BIN_SOURCE" "$BIN_PATH"
+  chown "$SERVICE_USER":"$SERVICE_GROUP" "$BIN_PATH"
+}
+
+render_config_file() {
+  if [[ ! -f "$CONFIG_SOURCE" ]]; then
+    echo "Config template not found at $CONFIG_SOURCE" >&2
+    exit 1
+  fi
+  detect_public_ip
+  export PUBLIC_IP AUTH_TOKEN LISTEN_ADDR DB_PATH CONFIG_DIR DOCKER_IMAGE DOCKER_BINARY
+  log "Rendering config file $CONFIG_FILE from $CONFIG_SOURCE..."
+  install -d -m 0755 "$(dirname "$CONFIG_FILE")"
+  envsubst <"$CONFIG_SOURCE" >"$CONFIG_FILE"
   chown "$SERVICE_USER":"$SERVICE_GROUP" "$CONFIG_FILE"
   chmod 0640 "$CONFIG_FILE"
 }
@@ -200,18 +140,14 @@ enable_services() {
 
 main() {
   apt_install
-  if [[ -z "$PUBLIC_IP" ]]; then
-    PUBLIC_IP="$(curl -fsSL https://api.ipify.org || true)"
-  fi
   setup_user
-  fetch_repo
-  build_binary
+  install_binary
   prepare_dirs
-  write_config_file
+  render_config_file
   write_env_file
   write_service_unit
   enable_services
-  log "Installation complete. API is available at ${LISTEN_ADDR}."
+  log "Installation complete. Config: ${CONFIG_FILE}."
 }
 
 main "$@"
