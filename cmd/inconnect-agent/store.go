@@ -60,12 +60,21 @@ type SlotCounts struct {
 type SlotStore struct {
 	db              *sql.DB
 	serverPasswords map[int]string
+	allocStrategy   string
+	lastShardIndex  int
+	shardOrder      []int
 }
 
-func NewSlotStore(db *sql.DB) *SlotStore {
+func NewSlotStore(db *sql.DB, strategy string, shards []ShardDefinition) *SlotStore {
+	order := make([]int, len(shards))
+	for i, sh := range shards {
+		order[i] = sh.ID
+	}
 	return &SlotStore{
 		db:              db,
 		serverPasswords: make(map[int]string),
+		allocStrategy:   strategy,
+		shardOrder:      order,
 	}
 }
 
@@ -185,11 +194,25 @@ func (s *SlotStore) AllocateSlot(ctx context.Context, userID string) (*Slot, err
 	defer tx.Rollback()
 
 	slot := &Slot{}
-	row := tx.QueryRowContext(ctx, `
+	var row *sql.Row
+	switch s.allocStrategy {
+	case "roundrobin", "leastfree":
+		shardID, err := s.selectShardForAllocation(ctx)
+		if err != nil {
+			return nil, err
+		}
+		row = tx.QueryRowContext(ctx, `
+SELECT port, password, shard_id FROM slots
+WHERE status = ? AND shard_id = ?
+ORDER BY port
+LIMIT 1`, slotStatusFree, shardID)
+	default: // sequential fallback
+		row = tx.QueryRowContext(ctx, `
 SELECT port, password, shard_id FROM slots
 WHERE status = ?
 ORDER BY port
 LIMIT 1`, slotStatusFree)
+	}
 	if err := row.Scan(&slot.ID, &slot.Password, &slot.ShardID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errNoFreePorts
@@ -449,4 +472,33 @@ GROUP BY shard_id, status`)
 		return nil, SlotCounts{}, fmt.Errorf("iterate slot stats: %w", err)
 	}
 	return counts, totals, nil
+}
+
+func (s *SlotStore) selectShardForAllocation(ctx context.Context) (int, error) {
+	switch s.allocStrategy {
+	case "sequential":
+		return 0, nil
+	case "roundrobin":
+		idx := s.lastShardIndex % len(s.shardOrder)
+		shardID := s.shardOrder[idx]
+		s.lastShardIndex = (idx + 1) % len(s.shardOrder)
+		return shardID, nil
+	case "leastfree":
+		stats, _, err := s.SlotStats(ctx)
+		if err != nil {
+			return 0, err
+		}
+		bestShard := 0
+		bestFree := -1
+		for _, id := range s.shardOrder {
+			free := stats[id].Free
+			if free > bestFree {
+				bestFree = free
+				bestShard = id
+			}
+		}
+		return bestShard, nil
+	default:
+		return 0, errors.New("unknown allocation strategy")
+	}
 }

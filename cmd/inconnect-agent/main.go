@@ -48,7 +48,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	store := NewSlotStore(db)
+	store := NewSlotStore(db, cfg.AllocStrategy, shards)
 	if err := store.Init(ctx, cfg, shards); err != nil {
 		log.Fatalf("initialize store: %v", err)
 	}
@@ -66,6 +66,9 @@ func main() {
 
 	if cfg.RestartSeconds > 0 {
 		agent.StartAutoRestart(ctx, time.Duration(cfg.RestartSeconds)*time.Second)
+	}
+	if cfg.RestartFreePct > 0 {
+		agent.StartAutoRestartOnLowFree(ctx, cfg.RestartFreePct, time.Minute)
 	}
 
 	server := &http.Server{

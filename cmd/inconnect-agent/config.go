@@ -31,6 +31,8 @@ type Config struct {
 	ShardRaw       string
 	ShardPrefix    string
 	RestartSeconds int
+	RestartFreePct int
+	AllocStrategy  string
 }
 
 func defaultConfig() Config {
@@ -54,6 +56,8 @@ func defaultConfig() Config {
 		ShardPortStep:  1,
 		ShardPrefix:    "xray-ss2022",
 		RestartSeconds: 0,
+		RestartFreePct: 0,
+		AllocStrategy:  "roundrobin",
 	}
 }
 
@@ -78,9 +82,15 @@ func (c *Config) registerFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.ShardRaw, "shards", c.ShardRaw, "Custom shard definitions port:slots,... (overrides shard-count)")
 	fs.StringVar(&c.ShardPrefix, "shard-prefix", c.ShardPrefix, "Prefix for shard container names")
 	fs.IntVar(&c.RestartSeconds, "restart-interval", c.RestartSeconds, "Automatic restart interval in seconds (0 disables)")
+	fs.IntVar(&c.RestartFreePct, "restart-when-free-below", c.RestartFreePct, "Trigger restart when free slots percent falls below this value (0 disables)")
+	fs.StringVar(&c.AllocStrategy, "allocation-strategy", c.AllocStrategy, "Slot allocation strategy: sequential|roundrobin|leastfree")
 }
 
 func (c Config) validate() error {
+	validAlloc := map[string]bool{"sequential": true, "roundrobin": true, "leastfree": true}
+	if !validAlloc[c.AllocStrategy] {
+		return fmt.Errorf("invalid allocation-strategy %q", c.AllocStrategy)
+	}
 	if c.MinPort <= 0 || c.MaxPort <= 0 {
 		return errors.New("ports must be positive")
 	}

@@ -169,6 +169,49 @@ func (a *Agent) StartAutoRestart(ctx context.Context, interval time.Duration) {
 	}()
 }
 
+func (a *Agent) StartAutoRestartOnLowFree(ctx context.Context, thresholdPercent int, checkInterval time.Duration) {
+	if thresholdPercent <= 0 {
+		return
+	}
+	if checkInterval <= 0 {
+		checkInterval = time.Minute
+	}
+	ticker := time.NewTicker(checkInterval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				a.checkAndRestartOnLowFree(ctx, thresholdPercent)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (a *Agent) checkAndRestartOnLowFree(ctx context.Context, thresholdPercent int) {
+	a.opLock.RLock()
+	statsByShard, totals, err := a.store.SlotStats(ctx)
+	a.opLock.RUnlock()
+	if err != nil {
+		log.Printf("auto restart check failed: %v", err)
+		return
+	}
+	totalSlots := totals.Free + totals.Used + totals.Reserved
+	if totalSlots == 0 {
+		return
+	}
+	freePercent := totals.Free * 100 / totalSlots
+	if freePercent >= thresholdPercent {
+		return
+	}
+	log.Printf("free slots %d%% below threshold %d%%, triggering restart", freePercent, thresholdPercent)
+	if _, err := a.ReloadAndRestart(context.Background(), true, nil); err != nil {
+		log.Printf("auto restart on low free failed: %v", err)
+	}
+}
+
 type xrayConfig struct {
 	API       apiConfig      `json:"api"`
 	Routing   routingConfig  `json:"routing"`

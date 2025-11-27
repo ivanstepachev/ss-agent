@@ -79,15 +79,14 @@ func (a *Agent) handleAddUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
-		"status":           "ok",
-		"slotId":           slot.ID,
-		"shardId":          shard.ID,
-		"listenPort":       shard.Port,
-		"password":         fmt.Sprintf("%s:%s", a.store.ServerPassword(shard.ID), slot.Password),
-		"method":           a.cfg.Method,
-		"ip":               a.cfg.PublicIP,
-		"freeSlots":        totals.Free,
-		"freeSlotsByShard": freeByShard,
+		"status":     "ok",
+		"slotId":     slot.ID,
+		"shardId":    shard.ID,
+		"listenPort": shard.Port,
+		"password":   fmt.Sprintf("%s:%s", a.store.ServerPassword(shard.ID), slot.Password),
+		"method":     a.cfg.Method,
+		"ip":         a.cfg.PublicIP,
+		"freeSlots":  totals.Free,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
