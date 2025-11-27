@@ -11,55 +11,55 @@ import (
 
 // Config captures all runtime configuration for the agent.
 type Config struct {
-	DBPath         string
-	MinPort        int
-	MaxPort        int
-	ConfigDir      string
-	ConfigFile     string
-	GeneratedFile  string
-	ListenAddr     string
-	PublicIP       string
-	AuthToken      string
-	ContainerName  string
-	DockerImage    string
-	DockerBinary   string
-	Method         string
-	APIPort        int
-	ShardCount     int
-	ShardSize      int
-	ShardPortStep  int
-	ShardRaw       string
-	ShardPrefix    string
-	RestartSeconds int
-	RestartFreePct int
-	AllocStrategy  string
-	ResetOnly      bool
+	DBPath                  string
+	MinPort                 int
+	MaxPort                 int
+	ConfigDir               string
+	ConfigFile              string
+	GeneratedFile           string
+	ListenAddr              string
+	PublicIP                string
+	AuthToken               string
+	ContainerName           string
+	DockerImage             string
+	DockerBinary            string
+	Method                  string
+	APIPort                 int
+	ShardCount              int
+	ShardSize               int
+	ShardPortStep           int
+	ShardRaw                string
+	ShardPrefix             string
+	RestartSeconds          int
+	RestartReservedPerShard int
+	AllocStrategy           string
+	ResetOnly               bool
 }
 
 func defaultConfig() Config {
 	return Config{
-		DBPath:         "/var/lib/inconnect-agent/ports.db",
-		MinPort:        50001,
-		MaxPort:        50250,
-		ConfigDir:      "/etc/xray",
-		ConfigFile:     "config.json",
-		GeneratedFile:  "config.generated.json",
-		ListenAddr:     "127.0.0.1:8080",
-		PublicIP:       "",
-		AuthToken:      "",
-		ContainerName:  "xray-ss2022",
-		DockerImage:    "teddysun/xray:latest",
-		DockerBinary:   "docker",
-		Method:         "2022-blake3-aes-128-gcm",
-		APIPort:        10085,
-		ShardCount:     1,
-		ShardSize:      0,
-		ShardPortStep:  1,
-		ShardPrefix:    "xray-ss2022",
-		RestartSeconds: 0,
-		RestartFreePct: 0,
-		AllocStrategy:  "roundrobin",
-		ResetOnly:      false,
+		DBPath:                  "/var/lib/inconnect-agent/ports.db",
+		MinPort:                 50001,
+		MaxPort:                 50250,
+		ConfigDir:               "/etc/xray",
+		ConfigFile:              "config.json",
+		GeneratedFile:           "config.generated.json",
+		ListenAddr:              "127.0.0.1:8080",
+		PublicIP:                "",
+		AuthToken:               "",
+		ContainerName:           "xray-ss2022",
+		DockerImage:             "teddysun/xray:latest",
+		DockerBinary:            "docker",
+		Method:                  "2022-blake3-aes-128-gcm",
+		APIPort:                 10085,
+		ShardCount:              1,
+		ShardSize:               0,
+		ShardPortStep:           1,
+		ShardPrefix:             "xray-ss2022",
+		RestartSeconds:          0,
+		RestartReservedPerShard: 0,
+		AllocStrategy:           "roundrobin",
+		ResetOnly:               false,
 	}
 }
 
@@ -84,7 +84,7 @@ func (c *Config) registerFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.ShardRaw, "shards", c.ShardRaw, "Custom shard definitions port:slots,... (overrides shard-count)")
 	fs.StringVar(&c.ShardPrefix, "shard-prefix", c.ShardPrefix, "Prefix for shard container names")
 	fs.IntVar(&c.RestartSeconds, "restart-interval", c.RestartSeconds, "Automatic restart interval in seconds (0 disables)")
-	fs.IntVar(&c.RestartFreePct, "restart-when-free-below", c.RestartFreePct, "Trigger restart when free slots percent falls below this value (0 disables)")
+	fs.IntVar(&c.RestartReservedPerShard, "restart-when-reserved", c.RestartReservedPerShard, "Trigger restart for a shard once reserved slots reach this number (0 disables)")
 	fs.StringVar(&c.AllocStrategy, "allocation-strategy", c.AllocStrategy, "Slot allocation strategy: sequential|roundrobin|leastfree")
 	fs.BoolVar(&c.ResetOnly, "reset", c.ResetOnly, "Reset database and shards, then exit")
 }

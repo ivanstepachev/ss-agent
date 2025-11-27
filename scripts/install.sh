@@ -47,6 +47,7 @@ SHARD_PORT_STEP="${SHARD_PORT_STEP:-1}"
 SHARD_PREFIX="${SHARD_PREFIX:-xray-ss2022}"
 SHARDS="${SHARDS:-}"
 RESTART_INTERVAL="${RESTART_INTERVAL:-0}"
+RESTART_WHEN_RESERVED="${RESTART_WHEN_RESERVED:-0}"
 
 apt_install() {
   log "Installing OS dependencies..."
@@ -132,7 +133,8 @@ INCONNECT_FLAGS="-listen=${LISTEN_ADDR} \
 -shard-size=${SHARD_SIZE} \
 -shard-port-step=${SHARD_PORT_STEP} \
 -shard-prefix=${SHARD_PREFIX} \
--restart-interval=${RESTART_INTERVAL}"
+-restart-interval=${RESTART_INTERVAL} \
+-restart-when-reserved=${RESTART_WHEN_RESERVED}"
 EOF
   if [[ -n "$SHARDS" ]]; then
     echo 'INCONNECT_FLAGS="$INCONNECT_FLAGS -shards='"${SHARDS}"'"' >>"$SERVICE_ENV"

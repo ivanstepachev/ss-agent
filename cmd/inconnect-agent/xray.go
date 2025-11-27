@@ -159,8 +159,8 @@ func (a *Agent) StartAutoRestart(ctx context.Context, interval time.Duration) {
 	}()
 }
 
-func (a *Agent) StartAutoRestartOnLowFree(ctx context.Context, thresholdPercent int, checkInterval time.Duration) {
-	if thresholdPercent <= 0 {
+func (a *Agent) StartAutoRestartOnReserved(ctx context.Context, threshold int, checkInterval time.Duration) {
+	if threshold <= 0 {
 		return
 	}
 	if checkInterval <= 0 {
@@ -172,7 +172,7 @@ func (a *Agent) StartAutoRestartOnLowFree(ctx context.Context, thresholdPercent 
 		for {
 			select {
 			case <-ticker.C:
-				a.checkAndRestartOnLowFree(ctx, thresholdPercent)
+				a.checkAndRestartOnReserved(ctx, threshold)
 			case <-ctx.Done():
 				return
 			}
@@ -180,25 +180,32 @@ func (a *Agent) StartAutoRestartOnLowFree(ctx context.Context, thresholdPercent 
 	}()
 }
 
-func (a *Agent) checkAndRestartOnLowFree(ctx context.Context, thresholdPercent int) {
+func (a *Agent) checkAndRestartOnReserved(ctx context.Context, threshold int) {
 	a.opLock.RLock()
-	_, totals, err := a.store.SlotStats(ctx)
+	statsByShard, _, err := a.store.SlotStats(ctx)
 	a.opLock.RUnlock()
 	if err != nil {
-		log.Printf("auto restart check failed: %v", err)
+		log.Printf("auto restart reserved check failed: %v", err)
 		return
 	}
-	totalSlots := totals.Free + totals.Used + totals.Reserved
-	if totalSlots == 0 {
+
+	var targets []int
+	for _, shard := range a.shards {
+		stats := statsByShard[shard.ID]
+		if stats.Reserved >= threshold {
+			targets = append(targets, shard.ID)
+		}
+	}
+
+	if len(targets) == 0 {
 		return
 	}
-	freePercent := totals.Free * 100 / totalSlots
-	if freePercent >= thresholdPercent {
-		return
-	}
-	log.Printf("free slots %d%% below threshold %d%%, triggering restart", freePercent, thresholdPercent)
-	if _, err := a.ReloadAndRestart(context.Background(), true, nil); err != nil {
-		log.Printf("auto restart on low free failed: %v", err)
+
+	for _, shardID := range targets {
+		log.Printf("reserved slots in shard %d reached %d, triggering restart", shardID, threshold)
+		if _, err := a.ReloadAndRestart(context.Background(), true, []int{shardID}); err != nil {
+			log.Printf("auto restart on reserved shard %d failed: %v", shardID, err)
+		}
 	}
 }
 

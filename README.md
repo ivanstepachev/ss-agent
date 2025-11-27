@@ -26,7 +26,7 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | `-shards` | Явное описание `port:slots,...` (перекрывает предыдущие) | пусто |
 | `-shard-prefix` | Префикс для имён контейнеров | `xray-ss2022` |
 | `-restart-interval` | Авто-рестарт (с пересборкой) раз в N секунд (0 = выкл) | `0` |
-| `-restart-when-free-below` | Триггер рестарта, если свободных слотов < N% (0 = выкл) | `0` |
+| `-restart-when-reserved` | Перезапуск конкретного шарда, когда в нём ≥ N `reserved`-слотов (0 = выкл) | `0` |
 | `-allocation-strategy` | Распределение слотов: `sequential` / `roundrobin` / `leastfree` | `roundrobin` |
 | `-reset` | Выполнить полный сброс БД/шардов и завершить работу | `false` |
 | `-public-ip` | IP, отдаваемый в `/adduser` | пусто |
@@ -166,7 +166,7 @@ sudo REPO_URL=https://github.com/your-org/inconnect-agent.git \
      MIN_PORT=50010 \
      SHARD_PORT_STEP=10 \
      RESTART_INTERVAL=600 \
-     RESTART_WHEN_FREE_BELOW=20 \
+     RESTART_WHEN_RESERVED=50 \
      ALLOCATION_STRATEGY=roundrobin \
      ./scripts/install.sh
 ```
@@ -176,7 +176,7 @@ sudo REPO_URL=https://github.com/your-org/inconnect-agent.git \
 - `SHARDS` — явный список `port:slots,...`, если нужно задать разные размеры.
 - `SHARD_PREFIX` — как именовать контейнеры (по умолчанию `xray-ss2022` → `xray-ss2022-1`, `-2`, ...).
 - `RESTART_INTERVAL` — как часто автоматически запускать `/restart` (в секундах, 0 = отключено).
-- `RESTART_WHEN_FREE_BELOW` — дополнительно запускает рестарт, если свободных слотов < N%.
+- `RESTART_WHEN_RESERVED` — рестартует только те шарды, где накопилось ≥ N слотов со статусом `reserved`.
 - `ALLOCATION_STRATEGY` — стратегия выдачи слотов: `sequential`, `roundrobin`, `leastfree`.
 Полный список см. в начале скрипта (можно задавать и `BRANCH`, `INSTALL_DIR`, `DB_PATH`, `CONFIG_DIR`, и т.д.).
 

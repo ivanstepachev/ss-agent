@@ -75,8 +75,8 @@ func main() {
 	if cfg.RestartSeconds > 0 {
 		agent.StartAutoRestart(ctx, time.Duration(cfg.RestartSeconds)*time.Second)
 	}
-	if cfg.RestartFreePct > 0 {
-		agent.StartAutoRestartOnLowFree(ctx, cfg.RestartFreePct, time.Minute)
+	if cfg.RestartReservedPerShard > 0 {
+		agent.StartAutoRestartOnReserved(ctx, cfg.RestartReservedPerShard, time.Minute)
 	}
 
 	server := &http.Server{
