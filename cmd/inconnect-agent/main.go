@@ -19,8 +19,29 @@ import (
 
 func main() {
 	cfg := defaultConfig()
-	cfg.registerFlags(flag.CommandLine)
-	flag.Parse()
+	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	configPathFlag := fs.String("config", "", "Path to YAML or JSON config file")
+	cfg.registerFlags(fs)
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		log.Fatalf("parse flags: %v", err)
+	}
+
+	flagOverrides := captureSetFlags(fs)
+
+	if configPath := resolveConfigPath(*configPathFlag); configPath != "" {
+		if err := loadConfigFile(configPath, &cfg); err != nil {
+			log.Fatalf("load config %s: %v", configPath, err)
+		}
+		for name, value := range flagOverrides {
+			if name == "config" {
+				continue
+			}
+			if err := fs.Lookup(name).Value.Set(value); err != nil {
+				log.Fatalf("apply flag %s: %v", name, err)
+			}
+		}
+		log.Printf("configuration loaded from %s", configPath)
+	}
 
 	if err := cfg.validate(); err != nil {
 		log.Fatalf("invalid configuration: %v", err)
@@ -135,4 +156,12 @@ func cleanupContainers(ctx context.Context, docker *DockerManager, cfg Config, s
 			log.Printf("failed to remove shard container %s: %v", shard.ContainerName, err)
 		}
 	}
+}
+
+func captureSetFlags(fs *flag.FlagSet) map[string]string {
+	values := make(map[string]string)
+	fs.Visit(func(f *flag.Flag) {
+		values[f.Name] = f.Value.String()
+	})
+	return values
 }

@@ -12,30 +12,30 @@ import (
 
 // Config captures all runtime configuration for the agent.
 type Config struct {
-	DBPath                  string
-	MinPort                 int
-	MaxPort                 int
-	ConfigDir               string
-	ConfigFile              string
-	GeneratedFile           string
-	ListenAddr              string
-	PublicIP                string
-	AuthToken               string
-	ContainerName           string
-	DockerImage             string
-	DockerBinary            string
-	Method                  string
-	APIPort                 int
-	ShardCount              int
-	ShardSize               int
-	ShardPortStep           int
-	ShardRaw                string
-	ShardPrefix             string
-	RestartSeconds          int
-	RestartReservedPerShard int
-	RestartAtUTC            []string
-	AllocStrategy           string
-	ResetOnly               bool
+	DBPath                  string   `yaml:"dbPath"`
+	MinPort                 int      `yaml:"minPort"`
+	MaxPort                 int      `yaml:"maxPort"`
+	ConfigDir               string   `yaml:"configDir"`
+	ConfigFile              string   `yaml:"configFile"`
+	GeneratedFile           string   `yaml:"generatedFile"`
+	ListenAddr              string   `yaml:"listen"`
+	PublicIP                string   `yaml:"publicIP"`
+	AuthToken               string   `yaml:"authToken"`
+	ContainerName           string   `yaml:"containerName"`
+	DockerImage             string   `yaml:"dockerImage"`
+	DockerBinary            string   `yaml:"dockerBinary"`
+	Method                  string   `yaml:"method"`
+	APIPort                 int      `yaml:"apiPort"`
+	ShardCount              int      `yaml:"shardCount"`
+	ShardSize               int      `yaml:"shardSize"`
+	ShardPortStep           int      `yaml:"shardPortStep"`
+	ShardRaw                string   `yaml:"shards"`
+	ShardPrefix             string   `yaml:"shardPrefix"`
+	RestartSeconds          int      `yaml:"restartInterval"`
+	RestartReservedPerShard int      `yaml:"restartWhenReserved"`
+	RestartAtUTC            []string `yaml:"restartAt"`
+	AllocStrategy           string   `yaml:"allocationStrategy"`
+	ResetOnly               bool     `yaml:"reset"`
 }
 
 func defaultConfig() Config {

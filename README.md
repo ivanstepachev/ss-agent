@@ -18,6 +18,7 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 
 | Флаг | Описание | По умолчанию |
 | --- | --- | --- |
+| `-config` | Путь к YAML/JSON файлу конфигурации. Если не задан, используется `/etc/inconnect-agent/config.yaml` (если существует) или `INCONNECT_CONFIG`. | пусто |
 | `-listen` | HTTP API (`/adduser`, `/deleteuser`, `/reload`) | `127.0.0.1:8080` |
 | `-db-path` | SQLite база | `/var/lib/inconnect-agent/ports.db` |
 | `-min-port`, `-max-port` | Порт базы и общее число слотов (если не задан `-shards`) | `50001–50250` |
@@ -35,7 +36,36 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | `-docker-image` | Образ Xray | `teddysun/xray:latest` |
 | `-config-dir` | Каталог с конфигами | `/etc/xray` |
 
-Полный список см. `cmd/inconnect-agent/config.go`.
+Полный список см. `cmd/inconnect-agent/config.go`. Все параметры можно задать через файл `config.yaml` (YAML/JSON). Алгоритм чтения:
+
+1. Агент берёт значения по умолчанию.
+2. Если найден конфиг (`-config`, `INCONNECT_CONFIG` или `/etc/inconnect-agent/config.yaml`), он загружается и дополняет/переопределяет дефолты.
+3. Флаги командной строки имеют наивысший приоритет (перебивают файл).
+
+Пример `config.yaml`:
+```yaml
+listen: 127.0.0.1:8080
+dbPath: /var/lib/inconnect-agent/ports.db
+configDir: /etc/xray
+publicIP: 203.0.113.10
+authToken: SECRET
+dockerImage: teddysun/xray:latest
+shardCount: 8
+shardSize: 500
+shardPortStep: 10
+shardPrefix: xray-ss2022
+restartInterval: 0
+restartWhenReserved: 50
+restartAt:
+  - "02:00"
+  - "14:00"
+allocationStrategy: roundrobin
+```
+Запуск:
+```bash
+sudo ./bin/inconnect-agent -config=/etc/inconnect-agent/config.yaml
+```
+Если установлен `INCONNECT_CONFIG=/etc/inconnect-agent/config.yaml`, флаг можно не передавать.
 
 ### Шардинг
 - По умолчанию агент работает в одном контейнере: все слоты добавляются в `clients` на `min-port`.
@@ -50,11 +80,15 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
    sudo chown $USER /var/lib/inconnect-agent /etc/xray   # заменить на нужного пользователя
    ```
 2. Убедиться, что Docker доступен (тот же пользователь должен иметь права `docker`).
-3. Запустить агент:
+3. Создать конфиг (если ещё не создан) и запустить агент:
    ```bash
-   sudo ./bin/inconnect-agent \
-     -public-ip=203.0.113.10 \
-     -auth-token=SECRET_TOKEN
+   sudo tee /etc/inconnect-agent/config.yaml >/dev/null <<'EOF'
+listen: 127.0.0.1:8080
+dbPath: /var/lib/inconnect-agent/ports.db
+publicIP: 203.0.113.10
+authToken: SECRET_TOKEN
+EOF
+   sudo ./bin/inconnect-agent -config=/etc/inconnect-agent/config.yaml
    ```
 4. На старте агент:
    - инициализирует БД и создаёт слоты по каждому шару (по умолчанию 1×`max-port - min-port + 1`);
@@ -68,7 +102,7 @@ Description=Inconnect SS2022 agent
 After=network-online.target docker.service
 
 [Service]
-ExecStart=/usr/local/bin/inconnect-agent -public-ip=203.0.113.10 -auth-token=SECRET
+ExecStart=/usr/local/bin/inconnect-agent -config=/etc/inconnect-agent/config.yaml
 Restart=always
 User=inconnect
 Group=inconnect
@@ -155,7 +189,7 @@ WantedBy=multi-user.target
 - создаёт пользователя/группу `inconnect`;
 - клонирует репозиторий, собирает бинарь и кладёт его в `/usr/local/bin`;
 - готовит каталоги `/var/lib/inconnect-agent` и `/etc/xray`;
-- подтягивает Docker-образ Xray, пишет unit-файл systemd и запускает службу.
+- генерирует `/etc/inconnect-agent/config.yaml` из переданных переменных, записывает unit-файл systemd с `-config` и запускает службу.
 
 Перед запуском обязательно задайте `REPO_URL` (и при необходимости другие параметры) через переменные окружения:
 ```bash
@@ -181,6 +215,7 @@ sudo REPO_URL=https://github.com/your-org/inconnect-agent.git \
 - `RESTART_WHEN_RESERVED` — рестартует только те шарды, где накопилось ≥ N слотов со статусом `reserved`.
 - `RESTART_AT` — список UTC-времён (`HH:MM,HH:MM`), когда выполнять каскадный рестарт всех шардов (1–2 окна в сутки).
 - `ALLOCATION_STRATEGY` — стратегия выдачи слотов: `sequential`, `roundrobin`, `leastfree`.
+- `CONFIG_FILE` — путь, куда положить `config.yaml` (по умолчанию `/etc/inconnect-agent/config.yaml`).
 Полный список см. в начале скрипта (можно задавать и `BRANCH`, `INSTALL_DIR`, `DB_PATH`, `CONFIG_DIR`, и т.д.).
 
 ### Быстрое тестирование без удалённого репозитория
