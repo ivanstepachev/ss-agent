@@ -48,6 +48,7 @@ SHARD_PREFIX="${SHARD_PREFIX:-xray-ss2022}"
 SHARDS="${SHARDS:-}"
 RESTART_INTERVAL="${RESTART_INTERVAL:-0}"
 RESTART_WHEN_RESERVED="${RESTART_WHEN_RESERVED:-0}"
+RESTART_AT="${RESTART_AT:-}"
 
 apt_install() {
   log "Installing OS dependencies..."
@@ -138,6 +139,9 @@ INCONNECT_FLAGS="-listen=${LISTEN_ADDR} \
 EOF
   if [[ -n "$SHARDS" ]]; then
     echo 'INCONNECT_FLAGS="$INCONNECT_FLAGS -shards='"${SHARDS}"'"' >>"$SERVICE_ENV"
+  fi
+  if [[ -n "$RESTART_AT" ]]; then
+    echo 'INCONNECT_FLAGS="$INCONNECT_FLAGS -restart-at='"${RESTART_AT}"'"' >>"$SERVICE_ENV"
   fi
   chmod 0644 "$SERVICE_ENV"
 }

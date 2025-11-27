@@ -78,6 +78,9 @@ func main() {
 	if cfg.RestartReservedPerShard > 0 {
 		agent.StartAutoRestartOnReserved(ctx, cfg.RestartReservedPerShard, time.Minute)
 	}
+	if len(cfg.RestartAtUTC) > 0 {
+		agent.StartScheduledRestarts(ctx, cfg.RestartAtUTC)
+	}
 
 	server := &http.Server{
 		Addr:         cfg.ListenAddr,

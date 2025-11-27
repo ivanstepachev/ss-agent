@@ -27,6 +27,7 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | `-shard-prefix` | Префикс для имён контейнеров | `xray-ss2022` |
 | `-restart-interval` | Авто-рестарт (с пересборкой) раз в N секунд (0 = выкл) | `0` |
 | `-restart-when-reserved` | Перезапуск конкретного шарда, когда в нём ≥ N `reserved`-слотов (0 = выкл) | `0` |
+| `-restart-at` | Список времён по UTC (`HH:MM,HH:MM`), когда запускать рестарт всех шардов | пусто |
 | `-allocation-strategy` | Распределение слотов: `sequential` / `roundrobin` / `leastfree` | `roundrobin` |
 | `-reset` | Выполнить полный сброс БД/шардов и завершить работу | `false` |
 | `-public-ip` | IP, отдаваемый в `/adduser` | пусто |
@@ -167,6 +168,7 @@ sudo REPO_URL=https://github.com/your-org/inconnect-agent.git \
      SHARD_PORT_STEP=10 \
      RESTART_INTERVAL=600 \
      RESTART_WHEN_RESERVED=50 \
+     RESTART_AT="02:00,14:00" \
      ALLOCATION_STRATEGY=roundrobin \
      ./scripts/install.sh
 ```
@@ -177,6 +179,7 @@ sudo REPO_URL=https://github.com/your-org/inconnect-agent.git \
 - `SHARD_PREFIX` — как именовать контейнеры (по умолчанию `xray-ss2022` → `xray-ss2022-1`, `-2`, ...).
 - `RESTART_INTERVAL` — как часто автоматически запускать `/restart` (в секундах, 0 = отключено).
 - `RESTART_WHEN_RESERVED` — рестартует только те шарды, где накопилось ≥ N слотов со статусом `reserved`.
+- `RESTART_AT` — список UTC-времён (`HH:MM,HH:MM`), когда выполнять каскадный рестарт всех шардов (1–2 окна в сутки).
 - `ALLOCATION_STRATEGY` — стратегия выдачи слотов: `sequential`, `roundrobin`, `leastfree`.
 Полный список см. в начале скрипта (можно задавать и `BRANCH`, `INSTALL_DIR`, `DB_PATH`, `CONFIG_DIR`, и т.д.).
 
@@ -224,3 +227,4 @@ sudo LOCAL_SOURCE_DIR=$PWD \
 - `/reload` асинхронный: HTTP-ответ приходит сразу, а прогресс виден в `journalctl -u inconnect-agent`.
 - `/restart` пересобирает конфиг и делает `docker restart` шардов; можно запускать вручную или настроить авто-каскад через `-restart-interval`.
 - `/reset` и флаг `-reset` выполняют одинаковый «жёсткий» сброс. Через CLI можно запустить один раз: `sudo inconnect-agent ... -reset`. Через API операция выполняется асинхронно, но блокирует выдачу/удаление до завершения.
+- Для фиксированных «ночных» окон можно задать `-restart-at=02:00,14:00` (UTC) — агент сам будет каскадно перезапускаться в эти моменты независимо от аптайма.

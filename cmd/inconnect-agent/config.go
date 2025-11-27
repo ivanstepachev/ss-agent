@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config captures all runtime configuration for the agent.
@@ -32,6 +33,7 @@ type Config struct {
 	ShardPrefix             string
 	RestartSeconds          int
 	RestartReservedPerShard int
+	RestartAtUTC            []string
 	AllocStrategy           string
 	ResetOnly               bool
 }
@@ -58,6 +60,7 @@ func defaultConfig() Config {
 		ShardPrefix:             "xray-ss2022",
 		RestartSeconds:          0,
 		RestartReservedPerShard: 0,
+		RestartAtUTC:            nil,
 		AllocStrategy:           "roundrobin",
 		ResetOnly:               false,
 	}
@@ -85,6 +88,26 @@ func (c *Config) registerFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.ShardPrefix, "shard-prefix", c.ShardPrefix, "Prefix for shard container names")
 	fs.IntVar(&c.RestartSeconds, "restart-interval", c.RestartSeconds, "Automatic restart interval in seconds (0 disables)")
 	fs.IntVar(&c.RestartReservedPerShard, "restart-when-reserved", c.RestartReservedPerShard, "Trigger restart for a shard once reserved slots reach this number (0 disables)")
+	fs.Func("restart-at", "Comma-separated UTC times (HH:MM) for full restarts", func(v string) error {
+		if strings.TrimSpace(v) == "" {
+			c.RestartAtUTC = nil
+			return nil
+		}
+		parts := strings.Split(v, ",")
+		var times []string
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if _, err := time.Parse("15:04", part); err != nil {
+				return fmt.Errorf("invalid restart-at time %q: %w", part, err)
+			}
+			times = append(times, part)
+		}
+		c.RestartAtUTC = times
+		return nil
+	})
 	fs.StringVar(&c.AllocStrategy, "allocation-strategy", c.AllocStrategy, "Slot allocation strategy: sequential|roundrobin|leastfree")
 	fs.BoolVar(&c.ResetOnly, "reset", c.ResetOnly, "Reset database and shards, then exit")
 }
@@ -111,6 +134,11 @@ func (c Config) validate() error {
 	}
 	if filepath.Ext(c.GeneratedFile) == "" {
 		return errors.New("generated file name must include extension")
+	}
+	for _, t := range c.RestartAtUTC {
+		if _, err := time.Parse("15:04", t); err != nil {
+			return fmt.Errorf("invalid restart-at time %q: %w", t, err)
+		}
 	}
 	return nil
 }

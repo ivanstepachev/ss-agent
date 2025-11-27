@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -173,6 +174,57 @@ func (a *Agent) StartAutoRestartOnReserved(ctx context.Context, threshold int, c
 			select {
 			case <-ticker.C:
 				a.checkAndRestartOnReserved(ctx, threshold)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (a *Agent) StartScheduledRestarts(ctx context.Context, times []string) {
+	if len(times) == 0 {
+		return
+	}
+
+	var schedule []time.Duration
+	for _, t := range times {
+		parsed, err := time.Parse("15:04", t)
+		if err != nil {
+			log.Printf("skipping invalid restart time %q: %v", t, err)
+			continue
+		}
+		schedule = append(schedule, time.Duration(parsed.Hour())*time.Hour+time.Duration(parsed.Minute())*time.Minute)
+	}
+	if len(schedule) == 0 {
+		return
+	}
+	sort.Slice(schedule, func(i, j int) bool { return schedule[i] < schedule[j] })
+
+	go func() {
+		for {
+			now := time.Now().UTC()
+			elapsed := time.Duration(now.Hour())*time.Hour +
+				time.Duration(now.Minute())*time.Minute +
+				time.Duration(now.Second())*time.Second +
+				time.Duration(now.Nanosecond())
+
+			wait := time.Duration(-1)
+			for _, sched := range schedule {
+				if sched > elapsed {
+					wait = sched - elapsed
+					break
+				}
+			}
+			if wait < 0 {
+				wait = 24*time.Hour - elapsed + schedule[0]
+			}
+
+			select {
+			case <-time.After(wait):
+				log.Printf("scheduled restart trigger (UTC)")
+				if _, err := a.ReloadAndRestart(context.Background(), true, nil); err != nil {
+					log.Printf("scheduled restart failed: %v", err)
+				}
 			case <-ctx.Done():
 				return
 			}
