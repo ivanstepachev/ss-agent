@@ -28,6 +28,7 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | `-restart-interval` | Авто-рестарт (с пересборкой) раз в N секунд (0 = выкл) | `0` |
 | `-restart-when-free-below` | Триггер рестарта, если свободных слотов < N% (0 = выкл) | `0` |
 | `-allocation-strategy` | Распределение слотов: `sequential` / `roundrobin` / `leastfree` | `roundrobin` |
+| `-reset` | Выполнить полный сброс БД/шардов и завершить работу | `false` |
 | `-public-ip` | IP, отдаваемый в `/adduser` | пусто |
 | `-auth-token` | Требуемый заголовок `X-Auth-Token` | пусто (без авторизации) |
 | `-docker-image` | Образ Xray | `teddysun/xray:latest` |
@@ -88,7 +89,7 @@ WantedBy=multi-user.target
   - `listenPort` — фактический порт Shadowsocks (общий для всех клиентов);
   - `slotId` — идентификатор слота (его же нужно передавать в `/deleteuser`);
   - `password` — значение формата `<server_psk>:<client_psk>` (можно вставлять прямо в клиент);
-  - `freeSlots` и `freeSlotsByShard` — текущий остаток свободных слотов по всем шардовым контейнерам.
+  - `freeSlots` — сколько слотов осталось свободными суммарно.
 - `/deleteuser`
   ```bash
   curl -XPOST -H "Content-Type: application/json" \
@@ -119,6 +120,15 @@ WantedBy=multi-user.target
   curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/restart
   ```
   Пересобирает конфиг так же, как `/reload`, и сразу выполняет **полный рестарт** шардов (или конкретного, если передать `{"shardId":2}`), чтобы мгновенно сбросить все текущие TCP/UDP соединения.
+- `/reset`
+  ```bash
+  curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/reset
+  ```
+  Асинхронно выполняет полный сброс:
+  1. останавливает и удаляет все контейнеры `xray-ss2022-*`;
+  2. очищает таблицы `slots` и `metadata`, создаёт новый набор слотов и серверных PSK;
+  3. пересобирает конфиги всех шардов и выполняет каскадный рестарт.
+  Используйте, когда нужно «начать с нуля» и раздать всем клиентам новые пароли.
 
 - `/stats` (GET)
   ```bash
@@ -205,7 +215,7 @@ sudo LOCAL_SOURCE_DIR=$PWD \
         http://127.0.0.1:8080/restart
    journalctl -u inconnect-agent -n 20
    ```
-   В журналах появятся строки `async reload finished` и `reserved processed=N`.
+В журналах появятся строки `async reload finished` и `reserved processed=N`.
 
 ## Примечания
 - В БД автоматически создаётся таблица `metadata` с серверным паролем (`server_psk`) для единого inbound-а. При первом запуске значение генерируется и сохраняется.
@@ -213,3 +223,4 @@ sudo LOCAL_SOURCE_DIR=$PWD \
 - Все слоты (даже `free`) присутствуют в конфиге как `clients`, поэтому `/adduser` не требует reload. Ответ содержит `slotId`, `shardId`, `listenPort` и готовый пароль `<server_psk>:<client_psk>`.
 - `/reload` асинхронный: HTTP-ответ приходит сразу, а прогресс виден в `journalctl -u inconnect-agent`.
 - `/restart` пересобирает конфиг и делает `docker restart` шардов; можно запускать вручную или настроить авто-каскад через `-restart-interval`.
+- `/reset` и флаг `-reset` выполняют одинаковый «жёсткий» сброс. Через CLI можно запустить один раз: `sudo inconnect-agent ... -reset`. Через API операция выполняется асинхронно, но блокирует выдачу/удаление до завершения.

@@ -33,6 +33,7 @@ type Config struct {
 	RestartSeconds int
 	RestartFreePct int
 	AllocStrategy  string
+	ResetOnly      bool
 }
 
 func defaultConfig() Config {
@@ -58,6 +59,7 @@ func defaultConfig() Config {
 		RestartSeconds: 0,
 		RestartFreePct: 0,
 		AllocStrategy:  "roundrobin",
+		ResetOnly:      false,
 	}
 }
 
@@ -84,6 +86,7 @@ func (c *Config) registerFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.RestartSeconds, "restart-interval", c.RestartSeconds, "Automatic restart interval in seconds (0 disables)")
 	fs.IntVar(&c.RestartFreePct, "restart-when-free-below", c.RestartFreePct, "Trigger restart when free slots percent falls below this value (0 disables)")
 	fs.StringVar(&c.AllocStrategy, "allocation-strategy", c.AllocStrategy, "Slot allocation strategy: sequential|roundrobin|leastfree")
+	fs.BoolVar(&c.ResetOnly, "reset", c.ResetOnly, "Reset database and shards, then exit")
 }
 
 func (c Config) validate() error {

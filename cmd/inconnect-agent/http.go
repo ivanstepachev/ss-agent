@@ -18,6 +18,7 @@ func (a *Agent) Router() http.Handler {
 	mux.Handle("/deleteuser", a.wrap(a.handleDeleteUser))
 	mux.Handle("/reload", a.wrap(a.handleReload))
 	mux.Handle("/restart", a.wrap(a.handleRestart))
+	mux.Handle("/reset", a.wrap(a.handleReset))
 	mux.HandleFunc("/stats", a.handleStats)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -67,17 +68,11 @@ func (a *Agent) handleAddUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "unknown_shard")
 		return
 	}
-	statsByShard, totals, err := a.store.SlotStats(r.Context())
+	_, totals, err := a.store.SlotStats(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "stats_error")
 		return
 	}
-
-	freeByShard := make(map[int]int, len(statsByShard))
-	for _, sh := range a.shards {
-		freeByShard[sh.ID] = statsByShard[sh.ID].Free
-	}
-
 	resp := map[string]any{
 		"status":     "ok",
 		"slotId":     slot.ID,
@@ -187,6 +182,20 @@ func (a *Agent) handleRestart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("async restart finished: %+v", processed)
+	}()
+}
+
+func (a *Agent) handleReset(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":  "accepted",
+		"message": "reset started",
+	})
+	go func() {
+		if err := a.HardReset(context.Background()); err != nil {
+			log.Printf("async reset failed: %v", err)
+			return
+		}
+		log.Printf("async hard reset finished")
 	}()
 }
 

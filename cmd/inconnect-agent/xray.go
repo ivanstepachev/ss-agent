@@ -54,17 +54,18 @@ func (a *Agent) shardList(target []int) ([]ShardDefinition, error) {
 }
 
 func (a *Agent) Reload(ctx context.Context, rotateReserved bool, target []int) (map[int]int, error) {
-	return a.reload(ctx, rotateReserved, target, false)
+	a.opLock.Lock()
+	defer a.opLock.Unlock()
+	return a.reloadWithLock(ctx, rotateReserved, target, false)
 }
 
 func (a *Agent) ReloadAndRestart(ctx context.Context, rotateReserved bool, target []int) (map[int]int, error) {
-	return a.reload(ctx, rotateReserved, target, true)
-}
-
-func (a *Agent) reload(ctx context.Context, rotateReserved bool, target []int, hardRestart bool) (map[int]int, error) {
 	a.opLock.Lock()
 	defer a.opLock.Unlock()
+	return a.reloadWithLock(ctx, rotateReserved, target, true)
+}
 
+func (a *Agent) reloadWithLock(ctx context.Context, rotateReserved bool, target []int, hardRestart bool) (map[int]int, error) {
 	a.reloadM.Lock()
 	defer a.reloadM.Unlock()
 
@@ -85,19 +86,8 @@ func (a *Agent) reload(ctx context.Context, rotateReserved bool, target []int, h
 }
 
 func (a *Agent) Restart(ctx context.Context, target []int) error {
-	a.reloadM.Lock()
-	defer a.reloadM.Unlock()
-
-	shards, err := a.shardList(target)
-	if err != nil {
-		return err
-	}
-	for _, shard := range shards {
-		if err := a.docker.FullRestartShard(ctx, a.cfg, shard); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := a.ReloadAndRestart(ctx, true, target)
+	return err
 }
 
 func (a *Agent) reloadShard(ctx context.Context, shard ShardDefinition, rotate bool, hardRestart bool) (int, error) {
@@ -210,6 +200,18 @@ func (a *Agent) checkAndRestartOnLowFree(ctx context.Context, thresholdPercent i
 	if _, err := a.ReloadAndRestart(context.Background(), true, nil); err != nil {
 		log.Printf("auto restart on low free failed: %v", err)
 	}
+}
+
+func (a *Agent) HardReset(ctx context.Context) error {
+	a.opLock.Lock()
+	defer a.opLock.Unlock()
+
+	cleanupContainers(ctx, a.docker, a.cfg, a.shards)
+	if err := a.store.Reset(ctx, a.shards); err != nil {
+		return fmt.Errorf("reset store: %w", err)
+	}
+	_, err := a.reloadWithLock(ctx, true, nil, true)
+	return err
 }
 
 type xrayConfig struct {

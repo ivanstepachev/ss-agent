@@ -60,6 +60,14 @@ func main() {
 	cleanupContainers(ctx, dockerManager, cfg, shards)
 	agent := NewAgent(cfg, shards, store, dockerManager)
 
+	if cfg.ResetOnly {
+		if err := agent.HardReset(ctx); err != nil {
+			log.Fatalf("hard reset failed: %v", err)
+		}
+		log.Printf("hard reset completed")
+		return
+	}
+
 	if _, err := agent.Reload(ctx, false, nil); err != nil {
 		log.Fatalf("initial config generation failed: %v", err)
 	}

@@ -502,3 +502,19 @@ func (s *SlotStore) selectShardForAllocation(ctx context.Context) (int, error) {
 		return 0, errors.New("unknown allocation strategy")
 	}
 }
+
+func (s *SlotStore) Reset(ctx context.Context, shards []ShardDefinition) error {
+	s.lastShardIndex = 0
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM slots`); err != nil {
+		return fmt.Errorf("truncate slots: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+DELETE FROM metadata 
+WHERE key LIKE 'server_psk_shard_%' OR key = 'server_psk'`); err != nil {
+		return fmt.Errorf("truncate metadata: %w", err)
+	}
+	if err := s.ensureSlots(ctx, shards); err != nil {
+		return err
+	}
+	return s.ensureServerPasswords(ctx, shards)
+}
