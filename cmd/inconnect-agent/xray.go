@@ -192,7 +192,7 @@ func (a *Agent) StartAutoRestartOnLowFree(ctx context.Context, thresholdPercent 
 
 func (a *Agent) checkAndRestartOnLowFree(ctx context.Context, thresholdPercent int) {
 	a.opLock.RLock()
-	statsByShard, totals, err := a.store.SlotStats(ctx)
+	_, totals, err := a.store.SlotStats(ctx)
 	a.opLock.RUnlock()
 	if err != nil {
 		log.Printf("auto restart check failed: %v", err)
