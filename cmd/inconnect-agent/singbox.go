@@ -284,7 +284,7 @@ type singboxConfig struct {
 
 type singboxLogConfig struct {
 	Level     string `json:"level"`
-	Timestamp bool   `json:"timestamp"`
+	Timestamp bool   `json:"timestamp,omitempty"`
 }
 
 type singboxAPIConfig struct {
@@ -328,19 +328,16 @@ func buildSingboxConfig(slots []Slot, shard ShardDefinition, cfg Config, serverP
 
 	payload := singboxConfig{
 		Log: singboxLogConfig{
-			Level:     "info",
-			Timestamp: true,
+			Level: "warning",
 		},
 		Inbounds: []singboxInbound{
 			{
 				Type:       "shadowsocks",
-				Tag:        fmt.Sprintf("shard-%d-ss", shard.ID),
 				Listen:     "0.0.0.0",
 				ListenPort: shard.Port,
 				Method:     cfg.Method,
 				Password:   serverPassword,
 				Users:      users,
-				Network:    "tcp,udp",
 			},
 		},
 		Outbounds: []singboxOutbound{
