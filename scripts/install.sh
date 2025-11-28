@@ -2,7 +2,7 @@
 #
 # Automated installer/bootstrapper for inconnect-agent on Ubuntu hosts.
 # The script installs dependencies, fetches the source code, builds the binary,
-# configures systemd, prepares SQLite + Xray directories, and starts the service.
+# configures systemd, prepares SQLite + sing-box directories, and starts the service.
 
 set -euo pipefail
 
@@ -26,8 +26,8 @@ SERVICE_USER="${SERVICE_USER:-inconnect}"
 SERVICE_GROUP="${SERVICE_GROUP:-inconnect}"
 SERVICE_ENV="${SERVICE_ENV:-/etc/default/inconnect-agent}"
 DB_PATH="${DB_PATH:-/var/lib/inconnect-agent/ports.db}"
-CONFIG_DIR="${CONFIG_DIR:-/etc/xray}"
-DOCKER_IMAGE="${DOCKER_IMAGE:-teddysun/xray:latest}"
+CONFIG_DIR="${CONFIG_DIR:-/etc/singbox}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-ghcr.io/sagernet/sing-box}"
 DOCKER_BINARY="${DOCKER_BINARY:-/usr/bin/docker}"
 BIN_SOURCE="${BIN_SOURCE:-./inconnect-agent}"
 CONFIG_SOURCE="${CONFIG_SOURCE:-./config.yaml}"

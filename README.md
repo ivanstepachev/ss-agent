@@ -3,10 +3,10 @@
 ## Требования
 - Go 1.21+
 - Docker CLI (агент вызывает `docker run`, `docker restart`, `docker inspect`)
-- Образ `xray:latest` (или другой, указанный флагом `-docker-image`)
+- Образ `ghcr.io/sagernet/sing-box` (или другой, указанный флагом `-docker-image`)
 - Доступная запись в каталоги:
   - `/var/lib/inconnect-agent` — база `ports.db`
-  - `/etc/xray` — `config.json` и временные файлы
+  - `/etc/singbox` — `config.json` и временные файлы
 
 ## Сборка
 ```bash
@@ -25,7 +25,7 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | `-shard-count` / `-shard-size` | Кол-во шардов и слотов в каждом (по умолчанию всё в одном) | `1` / `portCount` |
 | `-shard-port-step` | Разница между портами шардов | `1` |
 | `-shards` | Явное описание `port:slots,...` (перекрывает предыдущие) | пусто |
-| `-shard-prefix` | Префикс для имён контейнеров | `xray-ss2022` |
+| `-shard-prefix` | Префикс для имён контейнеров | `singbox` |
 | `-restart-interval` | Авто-рестарт (с пересборкой) раз в N секунд (0 = выкл) | `0` |
 | `-restart-when-reserved` | Перезапуск конкретного шарда, когда в нём ≥ N `reserved`-слотов (0 = выкл) | `0` |
 | `-restart-at` | Список времён по UTC (`HH:MM,HH:MM`), когда запускать рестарт всех шардов | пусто |
@@ -33,8 +33,8 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | `-reset` | Выполнить полный сброс БД/шардов и завершить работу | `false` |
 | `-public-ip` | IP, отдаваемый в `/adduser` | пусто |
 | `-auth-token` | Требуемый заголовок `X-Auth-Token` | пусто (без авторизации) |
-| `-docker-image` | Образ Xray | `teddysun/xray:latest` |
-| `-config-dir` | Каталог с конфигами | `/etc/xray` |
+| `-docker-image` | Образ Sing-box | `ghcr.io/sagernet/sing-box` |
+| `-config-dir` | Каталог с конфигами | `/etc/singbox` |
 
 Полный список см. `cmd/inconnect-agent/config.go`. Все параметры можно задать через файл `config.yaml` (YAML/JSON). Алгоритм чтения:
 
@@ -47,14 +47,14 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 ```yaml
 listen: 127.0.0.1:8080
 dbPath: /var/lib/inconnect-agent/ports.db
-configDir: /etc/xray
+configDir: /etc/singbox
 publicIP: 203.0.113.10
 authToken: SECRET
-dockerImage: teddysun/xray:latest
+dockerImage: ghcr.io/sagernet/sing-box
 shardCount: 8
 shardSize: 500
 shardPortStep: 10
-shardPrefix: xray-ss2022
+shardPrefix: singbox
 restartInterval: 0
 restartWhenReserved: 50
 restartAt:
@@ -77,8 +77,8 @@ sudo ./bin/inconnect-agent -config=/etc/inconnect-agent/config.yaml
 ## Запуск
 1. Создать каталоги:
    ```bash
-   sudo mkdir -p /var/lib/inconnect-agent /etc/xray
-   sudo chown $USER /var/lib/inconnect-agent /etc/xray   # заменить на нужного пользователя
+   sudo mkdir -p /var/lib/inconnect-agent /etc/singbox
+   sudo chown $USER /var/lib/inconnect-agent /etc/singbox   # заменить на нужного пользователя
    ```
 2. Убедиться, что Docker доступен (тот же пользователь должен иметь права `docker`).
 3. Создать конфиг (если ещё не создан) и запустить агент:
@@ -93,8 +93,8 @@ EOF
    ```
 4. На старте агент:
    - инициализирует БД и создаёт слоты по каждому шару (по умолчанию 1×`max-port - min-port + 1`);
-   - для каждого шарда формирует отдельный конфиг (`/etc/xray/config-shard-<n>.json`) с inbound на своём порту и собственным server PSK;
-   - проверяет конфиги `xray -test`, активирует их и создаёт/перезапускает контейнеры `shard-prefix-<n>` с маппингом только нужных портов.
+   - для каждого шарда формирует отдельный конфиг (`/etc/singbox/config-shard-<n>.json`) с inbound на своём порту и собственным server PSK;
+   - проверяет конфиги `sing-box check`, активирует их и создаёт/перезапускает контейнеры `shard-prefix-<n>` с маппингом только нужных портов.
 
 ### Пример systemd unit (упрощённый)
 ```
@@ -150,7 +150,7 @@ WantedBy=multi-user.target
   Процесс:
     - пароли у `reserved` → `free`;
     - пересборка конфига выбранного шарда;
-    - `xray -test` + обновление файла + `SIGUSR1` контейнеру (fallback на `docker restart` при ошибке).
+    - `sing-box check` + обновление файла + HTTP-запрос к API sing-box (`POST /config/reload`). При ошибке API выполняется `docker restart`.
 - `/restart`
   ```bash
   curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/restart
@@ -161,7 +161,7 @@ WantedBy=multi-user.target
   curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/reset
   ```
   Асинхронно выполняет полный сброс:
-  1. останавливает и удаляет все контейнеры `xray-ss2022-*`;
+  1. останавливает и удаляет все контейнеры `singbox-*`;
   2. очищает таблицы `slots` и `metadata`, создаёт новый набор слотов и серверных PSK;
   3. пересобирает конфиги всех шардов и выполняет каскадный рестарт.
   Используйте, когда нужно «начать с нуля» и раздать всем клиентам новые пароли.
@@ -192,7 +192,7 @@ WantedBy=multi-user.target
 - сам `scripts/install.sh`.
 
 При запуске скрипт:
-1. Устанавливает зависимости (`docker.io`, `curl`, `gettext-base`), создаёт пользователя `inconnect`, каталоги `/var/lib/inconnect-agent` и `/etc/xray`.
+1. Устанавливает зависимости (`docker.io`, `curl`, `gettext-base`), создаёт пользователя `inconnect`, каталоги `/var/lib/inconnect-agent` и `/etc/singbox`.
 2. Копирует бинарь в `/usr/local/bin/inconnect-agent`.
 3. Подставляет переменные в шаблон (`envsubst`), автоматически определяет IP сервера (если `PUBLIC_IP` не задан), рендерит `/etc/inconnect-agent/config.yaml`.
 4. Создаёт unit-файл systemd с `-config=/etc/inconnect-agent/config.yaml`, включает и запускает службу.
@@ -215,13 +215,13 @@ sudo AUTH_TOKEN=SECRET_TOKEN \
 ```yaml
 listen: ${LISTEN_ADDR:-127.0.0.1:8080}
 dbPath: /var/lib/inconnect-agent/ports.db
-configDir: /etc/xray
+configDir: /etc/singbox
 publicIP: ${PUBLIC_IP}
 authToken: ${AUTH_TOKEN}
 shardCount: 8
 shardSize: 500
 shardPortStep: 10
-shardPrefix: xray-ss2022
+shardPrefix: singbox
 restartWhenReserved: 50
 restartAt:
   - "02:00"
@@ -234,7 +234,7 @@ allocationStrategy: roundrobin
 1. Убедиться, что службы запущены:
    ```bash
    systemctl status inconnect-agent
-   docker ps | grep xray-ss2022
+   docker ps | grep singbox
    ```
 2. Получить тестовый слот:
    ```bash
@@ -261,7 +261,7 @@ allocationStrategy: roundrobin
 - В БД автоматически создаётся таблица `metadata` с серверным паролем (`server_psk`) для единого inbound-а. При первом запуске значение генерируется и сохраняется.
 - `min-port` определяет фактический порт прослушки Shadowsocks. `max-port` задаёт количество слотов (например, `50001–50250` = 250 слотов).
 - Все слоты (даже `free`) присутствуют в конфиге как `clients`, поэтому `/adduser` не требует reload. Ответ содержит `slotId`, `shardId`, `listenPort` и готовый пароль `<server_psk>:<client_psk>`.
-- `/reload` асинхронный: HTTP-ответ приходит сразу, а прогресс виден в `journalctl -u inconnect-agent`.
+- `/reload` асинхронный: HTTP-ответ приходит сразу, а прогресс виден в `journalctl -u inconnect-agent`. Применение выполняется через API sing-box (`POST /config/reload`); при ошибке API агент перезапускает контейнер.
 - `/restart` пересобирает конфиг и делает `docker restart` шардов; можно запускать вручную или настроить авто-каскад через `-restart-interval`.
 - `/reset` и флаг `-reset` выполняют одинаковый «жёсткий» сброс. Через CLI можно запустить один раз: `sudo inconnect-agent ... -reset`. Через API операция выполняется асинхронно, но блокирует выдачу/удаление до завершения.
 - Для фиксированных «ночных» окон можно задать `-restart-at=02:00,14:00` (UTC) — агент сам будет каскадно перезапускаться в эти моменты независимо от аптайма.

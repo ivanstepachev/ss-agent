@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,7 +108,7 @@ func (a *Agent) reloadShard(ctx context.Context, shard ShardDefinition, rotate b
 		return processed, err
 	}
 
-	payload, err := buildXrayConfig(slots, shard, a.cfg, a.store.ServerPassword(shard.ID))
+	payload, err := buildSingboxConfig(slots, shard, a.cfg, a.store.ServerPassword(shard.ID))
 	if err != nil {
 		return processed, fmt.Errorf("build config shard %d: %w", shard.ID, err)
 	}
@@ -273,141 +275,86 @@ func (a *Agent) HardReset(ctx context.Context) error {
 	return err
 }
 
-type xrayConfig struct {
-	API       apiConfig      `json:"api"`
-	Routing   routingConfig  `json:"routing"`
-	Policy    policyConfig   `json:"policy"`
-	Inbounds  []inbound      `json:"inbounds"`
-	Outbounds []outbound     `json:"outbounds"`
-	Stats     map[string]any `json:"stats"`
+type singboxConfig struct {
+	Log       singboxLogConfig  `json:"log"`
+	API       *singboxAPIConfig `json:"api,omitempty"`
+	Inbounds  []singboxInbound  `json:"inbounds"`
+	Outbounds []singboxOutbound `json:"outbounds"`
 }
 
-type apiConfig struct {
-	Tag      string   `json:"tag"`
-	Services []string `json:"services"`
+type singboxLogConfig struct {
+	Level     string `json:"level"`
+	Timestamp bool   `json:"timestamp"`
 }
 
-type routingConfig struct {
-	Rules []routingRule `json:"rules"`
+type singboxAPIConfig struct {
+	Listen string `json:"listen"`
 }
 
-type routingRule struct {
-	InboundTag  []string `json:"inboundTag"`
-	OutboundTag string   `json:"outboundTag"`
-	Type        string   `json:"type"`
+type singboxInbound struct {
+	Type       string         `json:"type"`
+	Tag        string         `json:"tag,omitempty"`
+	Listen     string         `json:"listen,omitempty"`
+	ListenPort int            `json:"listen_port"`
+	Method     string         `json:"method"`
+	Password   string         `json:"password"`
+	Users      []singboxUser  `json:"users,omitempty"`
+	Network    string         `json:"network,omitempty"`
+	Options    map[string]any `json:"options,omitempty"`
 }
 
-type policyConfig struct {
-	Levels map[string]policyLevel `json:"levels"`
-	System policySystem           `json:"system"`
-}
-
-type policyLevel struct {
-	StatsUserUplink   bool `json:"statsUserUplink"`
-	StatsUserDownlink bool `json:"statsUserDownlink"`
-}
-
-type policySystem struct {
-	StatsInboundUplink    bool `json:"statsInboundUplink"`
-	StatsInboundDownlink  bool `json:"statsInboundDownlink"`
-	StatsOutboundUplink   bool `json:"statsOutboundUplink"`
-	StatsOutboundDownlink bool `json:"statsOutboundDownlink"`
-}
-
-type inbound struct {
-	Listen   string         `json:"listen,omitempty"`
-	Port     int            `json:"port"`
-	Protocol string         `json:"protocol"`
-	Settings map[string]any `json:"settings"`
-	Tag      string         `json:"tag,omitempty"`
-}
-
-type outbound struct {
-	Protocol string `json:"protocol"`
-	Tag      string `json:"tag,omitempty"`
-}
-
-type ssClient struct {
+type singboxUser struct {
+	Name     string `json:"name,omitempty"`
 	Password string `json:"password"`
-	Email    string `json:"email,omitempty"`
 }
 
-func buildXrayConfig(slots []Slot, shard ShardDefinition, cfg Config, serverPassword string) ([]byte, error) {
-	clients := make([]ssClient, 0, len(slots))
+type singboxOutbound struct {
+	Type string `json:"type"`
+	Tag  string `json:"tag,omitempty"`
+}
+
+func buildSingboxConfig(slots []Slot, shard ShardDefinition, cfg Config, serverPassword string) ([]byte, error) {
+	users := make([]singboxUser, 0, len(slots))
 	for _, slot := range slots {
-		email := fmt.Sprintf("slot-%d", slot.ID)
+		name := fmt.Sprintf("slot-%d", slot.ID)
 		if slot.UserID.Valid && slot.UserID.String != "" {
-			email = slot.UserID.String
+			name = slot.UserID.String
 		}
-		clients = append(clients, ssClient{
+		users = append(users, singboxUser{
+			Name:     name,
 			Password: slot.Password,
-			Email:    email,
 		})
 	}
 
-	inbounds := []inbound{
-		{
-			Listen:   "0.0.0.0",
-			Port:     shard.Port,
-			Protocol: "shadowsocks",
-			Settings: map[string]any{
-				"method":   cfg.Method,
-				"password": serverPassword,
-				"network":  "tcp,udp",
-				"clients":  clients,
+	payload := singboxConfig{
+		Log: singboxLogConfig{
+			Level:     "info",
+			Timestamp: true,
+		},
+		Inbounds: []singboxInbound{
+			{
+				Type:       "shadowsocks",
+				Tag:        fmt.Sprintf("shard-%d-ss", shard.ID),
+				Listen:     "0.0.0.0",
+				ListenPort: shard.Port,
+				Method:     cfg.Method,
+				Password:   serverPassword,
+				Users:      users,
+				Network:    "tcp,udp",
 			},
+		},
+		Outbounds: []singboxOutbound{
+			{Type: "direct"},
 		},
 	}
 
 	if shard.APIPort > 0 {
-		inbounds = append(inbounds, inbound{
-			Listen:   "0.0.0.0",
-			Port:     shard.APIPort,
-			Protocol: "dokodemo-door",
-			Settings: map[string]any{
-				"address": "0.0.0.0",
-			},
-			Tag: "api",
-		})
+		payload.API = &singboxAPIConfig{
+			Listen: fmt.Sprintf("0.0.0.0:%d", shard.APIPort),
+		}
 	}
 
-	cfgPayload := xrayConfig{
-		API: apiConfig{
-			Tag:      "api",
-			Services: []string{"HandlerService", "LoggerService", "StatsService"},
-		},
-		Routing: routingConfig{
-			Rules: []routingRule{
-				{
-					InboundTag:  []string{"api"},
-					OutboundTag: "api",
-					Type:        "field",
-				},
-			},
-		},
-		Policy: policyConfig{
-			Levels: map[string]policyLevel{
-				"1": {
-					StatsUserUplink:   true,
-					StatsUserDownlink: true,
-				},
-			},
-			System: policySystem{
-				StatsInboundUplink:    true,
-				StatsInboundDownlink:  true,
-				StatsOutboundUplink:   true,
-				StatsOutboundDownlink: true,
-			},
-		},
-		Inbounds: inbounds,
-		Outbounds: []outbound{
-			{Protocol: "freedom"},
-			{Protocol: "dns", Tag: "api"},
-		},
-		Stats: map[string]any{},
-	}
-
-	bytes, err := json.MarshalIndent(cfgPayload, "", "  ")
+	bytes, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal config: %w", err)
 	}
@@ -425,15 +372,15 @@ func (d *DockerManager) TestShard(ctx context.Context, cfg Config, shard ShardDe
 		"run",
 		"--rm",
 		"-v",
-		fmt.Sprintf("%s:/etc/xray", cfg.ConfigDir),
+		fmt.Sprintf("%s:/etc/singbox", cfg.ConfigDir),
 		d.Image,
-		"xray",
-		"-test",
-		"-config",
-		filepath.ToSlash(filepath.Join("/etc/xray", filepath.Base(cfg.shardGeneratedPath(shard.ID)))),
+		"sing-box",
+		"check",
+		"-c",
+		filepath.ToSlash(filepath.Join("/etc/singbox", filepath.Base(cfg.shardGeneratedPath(shard.ID)))),
 	}
 	if err := runCommand(ctx, d.Binary, args); err != nil {
-		return fmt.Errorf("xray config validation failed (shard %d): %w", shard.ID, err)
+		return fmt.Errorf("sing-box config validation failed (shard %d): %w", shard.ID, err)
 	}
 	return nil
 }
@@ -447,11 +394,34 @@ func (d *DockerManager) ApplyShard(ctx context.Context, cfg Config, shard ShardD
 		log.Printf("docker container %s not found, creating", shard.ContainerName)
 		return d.createContainer(ctx, cfg, shard)
 	}
-	if err := d.sendSignal(ctx, shard.ContainerName, "SIGUSR1"); err != nil {
-		log.Printf("failed to signal container %s, falling back to restart: %v", shard.ContainerName, err)
-		if err := d.restartContainer(ctx, shard.ContainerName); err != nil {
-			return err
+	if shard.APIPort > 0 {
+		if err := d.reloadViaAPI(ctx, shard); err == nil {
+			return nil
+		} else {
+			log.Printf("sing-box API reload failed for %s: %v, restarting container", shard.ContainerName, err)
 		}
+	}
+	return d.restartContainer(ctx, shard.ContainerName)
+}
+
+func (d *DockerManager) reloadViaAPI(ctx context.Context, shard ShardDefinition) error {
+	if shard.APIPort == 0 {
+		return errors.New("api port is not configured")
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/config/reload", shard.APIPort)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, http.NoBody)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return fmt.Errorf("sing-box api reload status %d: %s", resp.StatusCode, string(body))
 	}
 	return nil
 }
@@ -489,21 +459,13 @@ func (d *DockerManager) restartContainer(ctx context.Context, name string) error
 	return nil
 }
 
-func (d *DockerManager) sendSignal(ctx context.Context, name, signal string) error {
-	args := []string{"kill", "--signal", signal, name}
-	if err := runCommand(ctx, d.Binary, args); err != nil {
-		return fmt.Errorf("send signal %s to %s: %w", signal, name, err)
-	}
-	return nil
-}
-
 func (d *DockerManager) createContainer(ctx context.Context, cfg Config, shard ShardDefinition) error {
 	args := []string{
 		"run",
 		"-d",
 		"--name", shard.ContainerName,
 		"--restart=always",
-		"-v", fmt.Sprintf("%s:/etc/xray", cfg.ConfigDir),
+		"-v", fmt.Sprintf("%s:/etc/singbox", cfg.ConfigDir),
 		"-p", fmt.Sprintf("%d:%d/tcp", shard.Port, shard.Port),
 		"-p", fmt.Sprintf("%d:%d/udp", shard.Port, shard.Port),
 	}
@@ -512,9 +474,10 @@ func (d *DockerManager) createContainer(ctx context.Context, cfg Config, shard S
 	}
 	args = append(args,
 		d.Image,
-		"xray",
-		"-config",
-		filepath.ToSlash(filepath.Join("/etc/xray", filepath.Base(cfg.shardConfigPath(shard.ID)))),
+		"sing-box",
+		"run",
+		"-c",
+		filepath.ToSlash(filepath.Join("/etc/singbox", filepath.Base(cfg.shardConfigPath(shard.ID)))),
 	)
 	if err := runCommand(ctx, d.Binary, args); err != nil {
 		return fmt.Errorf("create container %s: %w", shard.ContainerName, err)
