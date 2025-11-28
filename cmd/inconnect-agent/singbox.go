@@ -374,7 +374,6 @@ func (d *DockerManager) TestShard(ctx context.Context, cfg Config, shard ShardDe
 		"-v",
 		fmt.Sprintf("%s:/etc/singbox", cfg.ConfigDir),
 		d.Image,
-		"sing-box",
 		"check",
 		"-c",
 		filepath.ToSlash(filepath.Join("/etc/singbox", filepath.Base(cfg.shardGeneratedPath(shard.ID)))),
@@ -474,7 +473,6 @@ func (d *DockerManager) createContainer(ctx context.Context, cfg Config, shard S
 	}
 	args = append(args,
 		d.Image,
-		"sing-box",
 		"run",
 		"-c",
 		filepath.ToSlash(filepath.Join("/etc/singbox", filepath.Base(cfg.shardConfigPath(shard.ID)))),
