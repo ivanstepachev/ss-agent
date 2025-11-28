@@ -113,19 +113,9 @@ func (a *Agent) reloadShard(ctx context.Context, shard ShardDefinition, rotate b
 		return processed, fmt.Errorf("build config shard %d: %w", shard.ID, err)
 	}
 
-	genPath := a.cfg.shardGeneratedPath(shard.ID)
-	if err := os.WriteFile(genPath, payload, 0o640); err != nil {
+	configPath := a.cfg.shardConfigPath(shard.ID)
+	if err := os.WriteFile(configPath, payload, 0o640); err != nil {
 		return processed, fmt.Errorf("write config shard %d: %w", shard.ID, err)
-	}
-
-	if err := a.docker.TestShard(ctx, a.cfg, shard); err != nil {
-		_ = os.Remove(genPath)
-		return processed, err
-	}
-
-	if err := os.Rename(genPath, a.cfg.shardConfigPath(shard.ID)); err != nil {
-		_ = os.Remove(genPath)
-		return processed, fmt.Errorf("activate config shard %d: %w", shard.ID, err)
 	}
 
 	if hardRestart {
