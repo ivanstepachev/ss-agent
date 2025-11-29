@@ -54,19 +54,13 @@ func (a *Agent) shardList(target []int) ([]ShardDefinition, error) {
 	return defs, nil
 }
 
-func (a *Agent) Reload(ctx context.Context, rotateReserved bool, target []int) (map[int]int, error) {
-	a.opLock.Lock()
-	defer a.opLock.Unlock()
-	return a.reloadWithLock(ctx, rotateReserved, target, false)
-}
-
 func (a *Agent) ReloadAndRestart(ctx context.Context, rotateReserved bool, target []int) (map[int]int, error) {
 	a.opLock.Lock()
 	defer a.opLock.Unlock()
-	return a.reloadWithLock(ctx, rotateReserved, target, true)
+	return a.reloadWithLock(ctx, rotateReserved, target)
 }
 
-func (a *Agent) reloadWithLock(ctx context.Context, rotateReserved bool, target []int, hardRestart bool) (map[int]int, error) {
+func (a *Agent) reloadWithLock(ctx context.Context, rotateReserved bool, target []int) (map[int]int, error) {
 	a.reloadM.Lock()
 	defer a.reloadM.Unlock()
 
@@ -77,7 +71,7 @@ func (a *Agent) reloadWithLock(ctx context.Context, rotateReserved bool, target 
 
 	results := make(map[int]int, len(shards))
 	for _, shard := range shards {
-		count, err := a.reloadShard(ctx, shard, rotateReserved, hardRestart)
+		count, err := a.reloadShard(ctx, shard, rotateReserved)
 		if err != nil {
 			return results, err
 		}
@@ -91,7 +85,7 @@ func (a *Agent) Restart(ctx context.Context, target []int) error {
 	return err
 }
 
-func (a *Agent) reloadShard(ctx context.Context, shard ShardDefinition, rotate bool, hardRestart bool) (int, error) {
+func (a *Agent) reloadShard(ctx context.Context, shard ShardDefinition, rotate bool) (int, error) {
 	var processed int
 	if rotate {
 		count, err := a.store.RotateReserved(ctx, shard.ID)
@@ -126,14 +120,8 @@ func (a *Agent) reloadShard(ctx context.Context, shard ShardDefinition, rotate b
 		return processed, fmt.Errorf("activate config shard %d: %w", shard.ID, err)
 	}
 
-	if hardRestart {
-		if err := a.docker.FullRestartShard(ctx, a.cfg, shard); err != nil {
-			return processed, err
-		}
-	} else {
-		if err := a.docker.ApplyShard(ctx, a.cfg, shard); err != nil {
-			return processed, err
-		}
+	if err := a.docker.FullRestartShard(ctx, a.cfg, shard); err != nil {
+		return processed, err
 	}
 
 	log.Printf("shard %d config updated", shard.ID)
@@ -438,24 +426,6 @@ func (d *DockerManager) TestShard(ctx context.Context, cfg Config, shard ShardDe
 	return nil
 }
 
-func (d *DockerManager) ApplyShard(ctx context.Context, cfg Config, shard ShardDefinition) error {
-	exists, err := d.containerExists(ctx, shard.ContainerName)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		log.Printf("docker container %s not found, creating", shard.ContainerName)
-		return d.createContainer(ctx, cfg, shard)
-	}
-	if err := d.sendSignal(ctx, shard.ContainerName, "SIGUSR1"); err != nil {
-		log.Printf("failed to signal container %s, falling back to restart: %v", shard.ContainerName, err)
-		if err := d.restartContainer(ctx, shard.ContainerName); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (d *DockerManager) FullRestartShard(ctx context.Context, cfg Config, shard ShardDefinition) error {
 	exists, err := d.containerExists(ctx, shard.ContainerName)
 	if err != nil {
@@ -485,14 +455,6 @@ func (d *DockerManager) restartContainer(ctx context.Context, name string) error
 	args := []string{"restart", name}
 	if err := runCommand(ctx, d.Binary, args); err != nil {
 		return fmt.Errorf("restart container %s: %w", name, err)
-	}
-	return nil
-}
-
-func (d *DockerManager) sendSignal(ctx context.Context, name, signal string) error {
-	args := []string{"kill", "--signal", signal, name}
-	if err := runCommand(ctx, d.Binary, args); err != nil {
-		return fmt.Errorf("send signal %s to %s: %w", signal, name, err)
 	}
 	return nil
 }

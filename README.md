@@ -19,7 +19,7 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | Флаг | Описание | По умолчанию |
 | --- | --- | --- |
 | `-config` | Путь к YAML/JSON файлу конфигурации. Если не задан, используется `/etc/inconnect-agent/config.yaml` (если существует) или `INCONNECT_CONFIG`. | пусто |
-| `-listen` | HTTP API (`/adduser`, `/deleteuser`, `/reload`) | `127.0.0.1:8080` |
+| `-listen` | HTTP API (`/adduser`, `/deleteuser`, `/restart`, `/reset`, `/stats`) | `127.0.0.1:8080` |
 | `-db-path` | SQLite база | `/var/lib/inconnect-agent/ports.db` |
 | `-min-port`, `-max-port` | Порт базы и общее число слотов (если не задан `-shards`) | `50001–50250` |
 | `-shard-count` / `-shard-size` | Кол-во шардов и слотов в каждом (по умолчанию всё в одном) | `1` / `portCount` |
@@ -31,7 +31,7 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 | `-restart-at` | Список времён по UTC (`HH:MM,HH:MM`), когда запускать рестарт всех шардов | пусто |
 | `-allocation-strategy` | Распределение слотов: `sequential` / `roundrobin` / `leastfree` | `roundrobin` |
 | `-reset` | Выполнить полный сброс БД/шардов и завершить работу | `false` |
-| `-public-ip` | IP, отдаваемый в `/adduser` | пусто |
+| `-public-ip` | Больше не используется, агент всегда определяет IP сам | авто |
 | `-auth-token` | Требуемый заголовок `X-Auth-Token` | пусто (без авторизации) |
 | `-docker-image` | Образ Xray | `teddysun/xray:latest` |
 | `-config-dir` | Каталог с конфигами | `/etc/xray` |
@@ -41,14 +41,13 @@ go build -o bin/inconnect-agent ./cmd/inconnect-agent
 1. Агент берёт значения по умолчанию.
 2. Если найден конфиг (`-config`, `INCONNECT_CONFIG` или `/etc/inconnect-agent/config.yaml`), он загружается и дополняет/переопределяет дефолты.
 3. Флаги командной строки имеют наивысший приоритет (перебивают файл).
-4. Если `publicIP` не указан, агент автоматически определяет IP активного интерфейса.
+4. Публичный IP всегда определяется автоматически на основе активного интерфейса.
 
 Пример `config.yaml`:
 ```yaml
 listen: 127.0.0.1:8080
 dbPath: /var/lib/inconnect-agent/ports.db
 configDir: /etc/xray
-publicIP: 203.0.113.10
 authToken: SECRET
 dockerImage: teddysun/xray:latest
 shardCount: 8
@@ -86,7 +85,6 @@ sudo ./bin/inconnect-agent -config=/etc/inconnect-agent/config.yaml
    sudo tee /etc/inconnect-agent/config.yaml >/dev/null <<'EOF'
 listen: 127.0.0.1:8080
 dbPath: /var/lib/inconnect-agent/ports.db
-publicIP: 203.0.113.10
 authToken: SECRET_TOKEN
 EOF
    sudo ./bin/inconnect-agent -config=/etc/inconnect-agent/config.yaml
@@ -137,25 +135,11 @@ WantedBy=multi-user.target
   { "slotIds": [50037, 50038, 50040] }
   ```
 
-- `/reload`
-  ```bash
-  curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/reload
-  ```
-  Возвращает `202 Accepted` и запускает reload асинхронно. Можно указать конкретный шард:
-  ```bash
-  curl -XPOST -H "X-Auth-Token: SECRET" \
-       -d '{"shardId":2}' \
-       http://127.0.0.1:8080/reload
-  ```
-  Процесс:
-    - пароли у `reserved` → `free`;
-    - пересборка конфига выбранного шарда;
-    - `xray -test` + обновление файла + `SIGUSR1` контейнеру (fallback на `docker restart` при ошибке).
 - `/restart`
   ```bash
   curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/restart
   ```
-  Пересобирает конфиг так же, как `/reload`, и сразу выполняет **полный рестарт** шардов (или конкретного, если передать `{"shardId":2}`), чтобы мгновенно сбросить все текущие TCP/UDP соединения.
+  Асинхронно пересобирает конфиги выбранных шардов (по умолчанию всех), переводит `reserved` → `free` и выполняет **полный рестарт** контейнеров `xray-ss2022-*`. Можно передать `{"shardId":2}` для прицельного рестарта.
 - `/reset`
   ```bash
   curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/reset
@@ -194,7 +178,7 @@ WantedBy=multi-user.target
 При запуске скрипт:
 1. Устанавливает зависимости (`docker.io`, `curl`, `gettext-base`), создаёт пользователя `inconnect`, каталоги `/var/lib/inconnect-agent` и `/etc/xray`.
 2. Копирует бинарь в `/usr/local/bin/inconnect-agent`.
-3. Подставляет переменные в шаблон (`envsubst`), автоматически определяет IP сервера (если `PUBLIC_IP` не задан), рендерит `/etc/inconnect-agent/config.yaml`.
+3. Подставляет переменные в шаблон (`envsubst`) и рендерит `/etc/inconnect-agent/config.yaml` (публичный IP больше не требуется — агент определяет его сам).
 4. Создаёт unit-файл systemd с `-config=/etc/inconnect-agent/config.yaml`, включает и запускает службу.
 
 ### Использование
@@ -208,7 +192,7 @@ sudo AUTH_TOKEN=SECRET_TOKEN \
 - `BIN_SOURCE` — путь к бинарю (по умолчанию `./inconnect-agent`).
 - `CONFIG_SOURCE` — путь к шаблону config.yaml (по умолчанию `./config.yaml`).
 - `CONFIG_FILE` — куда положить финальный конфиг (`/etc/inconnect-agent/config.yaml`).
-- `PUBLIC_IP` — можно задать вручную, иначе скрипт определит IP через `ip route`/`curl`.
+- `PUBLIC_IP` — устаревший параметр; агент всё равно переопределяет IP автоматически.
 - `AUTH_TOKEN`, `LISTEN_ADDR` и любые другие — если они встречаются в шаблоне, `envsubst` подставит значения.
 
 Сам шаблон может выглядеть так:
@@ -216,7 +200,6 @@ sudo AUTH_TOKEN=SECRET_TOKEN \
 listen: ${LISTEN_ADDR:-127.0.0.1:8080}
 dbPath: /var/lib/inconnect-agent/ports.db
 configDir: /etc/xray
-publicIP: ${PUBLIC_IP}
 authToken: ${AUTH_TOKEN}
 shardCount: 8
 shardSize: 500
@@ -244,24 +227,22 @@ allocationStrategy: roundrobin
         http://127.0.0.1:8080/adduser
    ```
    Запомните `slotId`, `shardId` и `listenPort` из ответа — пароль уже в формате `<server_psk>:<client_psk>`.
-3. Пометить и перезагрузить:
+3. Пометить и перезапустить:
    ```bash
    curl -XPOST -H "Content-Type: application/json" \
         -H "X-Auth-Token: SECRET" \
         -d '{"slotId":<slot_from_adduser>}' http://127.0.0.1:8080/deleteuser
-   curl -XPOST -H "X-Auth-Token: SECRET" http://127.0.0.1:8080/reload
    curl -XPOST -H "X-Auth-Token: SECRET" \
         -d '{"shardId":1}' \
         http://127.0.0.1:8080/restart
    journalctl -u inconnect-agent -n 20
    ```
-В журналах появятся строки `async reload finished` и `reserved processed=N`.
+В журналах появятся строки `async restart finished` и `reserved processed=N`.
 
 ## Примечания
 - В БД автоматически создаётся таблица `metadata` с серверным паролем (`server_psk`) для единого inbound-а. При первом запуске значение генерируется и сохраняется.
 - `min-port` определяет фактический порт прослушки Shadowsocks. `max-port` задаёт количество слотов (например, `50001–50250` = 250 слотов).
 - Все слоты (даже `free`) присутствуют в конфиге как `clients`, поэтому `/adduser` не требует reload. Ответ содержит `slotId`, `shardId`, `listenPort` и готовый пароль `<server_psk>:<client_psk>`.
-- `/reload` асинхронный: HTTP-ответ приходит сразу, а прогресс виден в `journalctl -u inconnect-agent`.
-- `/restart` пересобирает конфиг и делает `docker restart` шардов; можно запускать вручную или настроить авто-каскад через `-restart-interval`.
+- `/restart` асинхронный: HTTP-ответ приходит сразу, а прогресс виден в `journalctl -u inconnect-agent`. Он пересобирает конфиг и делает `docker restart` шардов; можно запускать вручную или настроить авто-каскад через `-restart-interval`.
 - `/reset` и флаг `-reset` выполняют одинаковый «жёсткий» сброс. Через CLI можно запустить один раз: `sudo inconnect-agent ... -reset`. Через API операция выполняется асинхронно, но блокирует выдачу/удаление до завершения.
 - Для фиксированных «ночных» окон можно задать `-restart-at=02:00,14:00` (UTC) — агент сам будет каскадно перезапускаться в эти моменты независимо от аптайма.
