@@ -43,14 +43,15 @@ func main() {
 		log.Printf("configuration loaded from %s", configPath)
 	}
 
-	if cfg.PublicIP == "" {
-		if ip, err := detectOutboundIP(); err == nil {
-			cfg.PublicIP = ip
-			log.Printf("public IP auto-detected: %s", ip)
-		} else {
-			log.Printf("failed to auto-detect public IP: %v", err)
-		}
+	ip, err := detectOutboundIP()
+	if err != nil {
+		log.Fatalf("detect public ip: %v", err)
 	}
+	if cfg.PublicIP != "" && cfg.PublicIP != ip {
+		log.Printf("configured public IP %s ignored, using auto-detected %s", cfg.PublicIP, ip)
+	}
+	cfg.PublicIP = ip
+	log.Printf("public IP auto-detected: %s", ip)
 
 	if err := cfg.validate(); err != nil {
 		log.Fatalf("invalid configuration: %v", err)
@@ -98,7 +99,7 @@ func main() {
 		return
 	}
 
-	if _, err := agent.Reload(ctx, false, nil); err != nil {
+	if _, err := agent.ReloadAndRestart(ctx, false, nil); err != nil {
 		log.Fatalf("initial config generation failed: %v", err)
 	}
 
